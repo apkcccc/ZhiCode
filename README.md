@@ -30,7 +30,7 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 | 内置终端 | 自带 Termux bootstrap（`app/src/main/assets/bootstrap-aarch64.zip`）→ 真实 PTY（`TerminalSession` + `libtermux.so`） |
 | 虚拟化沙箱 | `Bcore/`（BlackBox 血统）+ 宿主层 `com/zhizhu/zhicode/sandbox/` —— 免安装运行 APK、Frida 注入、原生内存调试 |
 | MCP / 技能 / 角色卡 / 记忆 | `McpStore`、`McpRuntime`、`SkillStore`、`RoleCardStore`、`MemoryStore` |
-| 会话与任务 | `SessionStore`、`TaskStore`、`PlanStore` |
+| 会话与任务 | `SessionStore`（写 SQLite 单库 `~/.zhicode/sessions.db`）、`TaskStore`、`PlanStore` |
 | 编辑器 | 独立 `EditorActivity`（独立进程 `:editor`）+ Rosemoe Sora Editor + TextMate 语法高亮 |
 | 权限门控 | `PermissionGate` / `PermissionModePolicy` / `RiskClassifier`，模式可在设置页与输入器页脚切换（见 [`SECURITY.md`](SECURITY.md)） |
 
@@ -189,7 +189,8 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 │   │ │ │ ├── tools/ # 工具实现 + ToolRegistry / ToolSchemas / PathPolicy / UnifiedDiff
 │   │ │ │ ├── agents/ # 子代理定义、加载与调度（SubagentManager）
 │   │ │ │ ├── mcp/ tasks/ # MCP 运行时 · TaskStore
-│   │ │ │ ├── storage/ # 会话落盘（Store / SegmentLog / BlobStore / Index / Snapshot）、
+│   │ │ │ ├── storage/ # 会话（SessionStore / SessionDatabase / BlobStore /
+│   │ │ │ │            BinaryValueCodec / LegacySessionImporter / ProjectPaths）、
 │   │ │ │ │           设置、计划、MCP 配置、原子写（AtomicFiles）
 │   │ │ │ ├── model/ # SessionConfig、ToolCall、AssistantTurn、ToolExecutionResult
 │   │ │ │ ├── security/ # AndroidSecretStore（Android Keystore + AES-GCM）
@@ -251,7 +252,16 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 | 加一个工具 | `.../zhicode/tools/` + `ToolRegistry.java` + `ToolSchemas.java` |
 | 权限怎么判、怎么问 | `.../zhicode/core/PermissionGate.java`、`PermissionModePolicy.java` |
 | Agent 的系统提示词 | `.../zhicode/core/SystemPromptBuilder.java` |
-| 会话如何落盘 / 迁移 | `.../zhicode/storage/SessionStore.java`（及同目录的 SegmentLog / BlobStore / Index / Snapshot） |
+| 会话如何落盘 | `.../zhicode/storage/SessionStore.java`（读写）＋ `SessionDatabase.java`（建表与回收） |
+| 会话数据长什么样 | `~/.zhicode/sessions.db`（SQLite 单库）＋ `~/.zhicode/blobs/aa/bb/<sha256>`（大内容） |
+| 落盘编码（不存 JSON 文本） | `.../zhicode/storage/BinaryValueCodec.java` |
+| 旧会话怎么搬过来 | `.../zhicode/storage/LegacySessionImporter.java`（一次性，校验通过才删旧文件） |
+| 读历史为什么只读最近 200 条 | `.../storage/SessionStore.java` 的 `readRowsWindow` ＋ `compose/data/SessionReader.kt` 的 `openPage` |
+| 对话流为什么有 600 条上限 | `compose/state/WorkspaceViewModel.kt` 的 `maxResidentItems` / `trimResidentTail` / `jumpToLatest` |
+| 会话大内容怎么回收 | `SessionDatabase.blob_refs` + `SessionStore.maintain()`（宽限期、增量 vacuum） |
+| 会话怎么导出 / 导入 | `.../storage/SessionArchive.java`（唯一的 `.jsonl.gz` 交换格式入口） |
+| 内存诊断日志（release 也打） | `.../storage/ZhiMemory.java`，tag `ZhiCodeMem` |
+| 项目目录键（计划 / 任务用） | `.../zhicode/storage/ProjectPaths.java` |
 | 内置 shell 怎么执行命令 | `.../zhicode/termux/TermuxShellExecutor.java` |
 | 界面 token（颜色 / 圆角 / 字阶） | `com/zhizhu/zhicode/compose/theme/` |
 | 某个界面组件 | `compose/ui/<区域>/`；先确认 `Common.kt` 里有没有现成的 `Zhi*` 包装 |

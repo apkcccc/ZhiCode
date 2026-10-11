@@ -177,6 +177,8 @@ fun UiDebugPage(
     viewModel: WorkspaceViewModel,
     glass: Glass,
     onBack: () -> Unit,
+    onExportSession: (String) -> Unit = {},
+    onImportSession: () -> Unit = {},
 ) {
     val scheme = MiuixTheme.colorScheme
     val listState = rememberLazyListState()
@@ -222,6 +224,7 @@ fun UiDebugPage(
                 // 是"进去以后慢慢看"的东西，排在后面。
                 item(key = "debugOverlay") { DebugOverlaySection(state, viewModel) }
                 item(key = "debugApi") { DebugApiSection(state, viewModel) }
+                item(key = "storage") { StorageSection(state, viewModel, onExportSession, onImportSession) }
                 item(key = "conversation") { ConversationSection(state.uiDebugResetToken) }
                 item(key = "tasks") { TaskCardSection() }
                 item(key = "media") { MediaSection(state.uiDebugResetToken) }
@@ -244,6 +247,60 @@ fun UiDebugPage(
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight(),
             )
+        }
+    }
+}
+
+// ------------------------------------------------------------------ 存储诊断
+
+/**
+ * 存储维护与归档入口。
+ *
+ * 这些按钮特意放在 UI 调试页而不是主聊天区：维护、导出、导入都是低频的运维动作，
+ * 不该占据日常对话界面；但它们又必须能在 release 构建里被真实验证，所以入口不依赖
+ * BuildConfig.DEBUG。
+ */
+@Composable
+private fun StorageSection(
+    state: WorkspaceUiState,
+    viewModel: WorkspaceViewModel,
+    onExportSession: (String) -> Unit,
+    onImportSession: () -> Unit,
+) {
+    DebugSection(
+        title = "会话存储维护",
+        subtitle = "运行时使用 SQLite + 内容寻址 Blob；JSONL 只作为导出/导入交换格式",
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SettingsEntry(
+                title = "查看存储占用",
+                valueText = "数据库 / 大内容 / 会话与引用数",
+                onClick = viewModel::storageReport,
+            )
+            SettingsEntry(
+                title = "立即维护",
+                valueText = "回收孤儿 Blob、清理遗留标记、回收数据库自由页",
+                onClick = viewModel::maintainStorage,
+            )
+            SettingsEntry(
+                title = "导出当前会话",
+                valueText = if (state.activeSessionId.isEmpty()) "没有打开的会话" else "导出为自包含 .jsonl.gz",
+                onClick = {
+                    if (state.activeSessionId.isEmpty()) viewModel.storageReport()
+                    else onExportSession("session-${state.activeSessionId.take(8)}.jsonl.gz")
+                },
+            )
+            SettingsEntry(
+                title = "导入会话归档",
+                valueText = "选择 .jsonl.gz，导入为一条新会话",
+                onClick = onImportSession,
+            )
+            if (!state.message.isNullOrBlank()) {
+                SettingsFootnote(state.message ?: "")
+            }
         }
     }
 }

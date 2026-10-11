@@ -22,6 +22,24 @@ data class ToolActivity(
     val deletions: Int = 0,
     val output: String = "",
     /**
+     * [output] 是不是**被截断过的预览**。
+     *
+     * ## 为什么需要这个标志
+     *
+     * 一条工具输出可能有几 MB（`Bash` 的完整 stdout、`Read` 的文件正文），而一次会话里
+     * 可能有过几百条工具。把它们全部塞进 `transcript` 就等于**把整个会话的工具输出常驻内存**
+     * —— 在 256MB 堆的设备上，这是打开长会话直接 OOM 的主因之一。
+     *
+     * 所以从历史恢复时 [output] 只带一份有界预览（见 `SessionReader.OUTPUT_PREVIEW_CHARS`），
+     * 真正的全文在用户展开这一条时按 [id] 去存储里取（`SessionStore.readToolResult`）。
+     *
+     * ## 为什么不能靠"文本里有没有省略提示"来判断
+     *
+     * 命令自己的输出完全可能包含同样的提示文字。用一个独立的布尔字段表达"这份是预览"，
+     * 界面才知道该不该发起那次读取 —— 靠内容判断会在恰好输出该文案时误判。
+     */
+    val outputTruncated: Boolean = false,
+    /**
      * 写文件类工具的**统一 diff**（引擎算好的，仅供界面显示，不发给模型）。
      *
      * ## 为什么必须单独存一份，不能从 [output] 里捞
@@ -126,7 +144,7 @@ data class ToolActivity(
  *
  * ## 为什么 base64 直接放在界面模型里
  *
- * 会话 JSONL 里的 image 块本来就是 `source.data` = base64（引擎写的，见
+ * 会话数据库里的 image 块本来就是 `source.data` = base64（引擎写的，见
  * `ZhiCodeEngine.buildUserContent`），这里**照原样搬过来**：
  * - 不存 Uri：`content://` 的读权限只在这个 Activity 生命周期内有效，
  *   恢复历史会话时那个 Uri 早就读不了了；
@@ -137,12 +155,23 @@ data class ToolActivity(
  * **一定能画出来**。
  */
 data class ChatImage(
-    /** base64（不带 `data:` 前缀，与引擎写进 JSONL 的形态一致）。 */
+    /** base64（不带 `data:` 前缀，与引擎写进会话数据库的形态一致）。 */
     val data: String,
     /** `image/png` 这类 MIME；解码只做兜底提示，不参与格式判断。 */
     val mimeType: String,
     /** 文件名，用于解码失败时回退显示与无障碍描述。 */
     val name: String,
+    /**
+     * 非空表示这份图**存在库里、按需取**：`data` 此时是空串。
+     *
+     * <p>为什么要有它：一条长会话里的图片 base64 是几十 MB 量级，读一次历史就把它
+     * 全部常驻，等于把堆占掉一大块。有了位置之后，界面在真正要画那一张时才去取
+     * 一次（见 `SessionReader.imageData`），滚动时只留**已经画过的那些**。
+     *
+     * <p>为空表示 `data` 就是全部内容（用户刚选的待发图片、工具返回的截图），
+     * 那是内存里本来就有的字节，取不到也不需要取。
+     */
+    val origin: ImageOrigin? = null,
 )
 
 data class ChatItem(
@@ -561,9 +590,63 @@ data class WorkspaceUiState(
     val sessions: List<SessionSummary> = emptyList(),
     val activeSessionId: String = "",
     val transcript: List<ChatItem> = emptyList(),
+    /**
+     * 对话流上面还有没有**没读进来**的更早内容。
+     *
+     * 恢复历史是**分页**的（只读最近的若干条，见 `SessionReader.PAGE_MESSAGES`）：
+     * 一次长会话的全部内容块是几十 MB 量级，整份读进内存再建界面模型会把应用直接
+     * 撑爆。这个标志为真时，列表顶部显示一个「正在加载更早的消息…」占位，
+     * 用户滚到顶就自动往前补一页。
+     */
+    val transcriptHasOlder: Boolean = false,
+    /** 上一页的上界：本页最早一行的 seq。翻页时用它，<= 0 表示没有更早的内容。 */
+    val transcriptOldestSeq: Long = -1L,
+    /** 正在补更早的一页。 */
+    val transcriptLoadingOlder: Boolean = false,
+    /**
+     * 往前补过多少页。每补一页 +1。
+     *
+     * 存在的理由是列表要能**区分两种"变长了"**：后面来了新消息（该吸底），
+     * 还是前面补了历史（绝不能吸底 —— 那会把用户刚滚上去的内容一把甩掉）。
+     * 靠"首项变了"去猜是不准的：重新打开同一条会话时首项也会变，而那次是该吸底的。
+     */
+    val transcriptPrependRevision: Int = 0,
+    /**
+     * 常驻窗口的**尾部**（最新那端）被淘汰过，最新消息已经不在内存里了。
+     *
+     * <p>为什么必须淘汰：恢复历史是分页的，但"往上滚"是**没有上限**的 —— 用户翻完
+     * 整条会话，transcript 就把整条会话又装回内存，和分页之前一样多。真机日志上这条
+     * 路径的表现是堆占用从 400MB 一路抬到 508MB/512MB（3% free），
+     * 然后每次分配都要排 ~1s 的 GC 队，掉帧 899 帧、输入延迟 4.6s。
+     *
+     * <p>为真时列表底部给一个「回到最新」，由 [WorkspaceViewModel.jumpToLatest] 用最新
+     * 一页**替换**常驻窗口 —— 替换而不是插入，所以不存在把同一条消息灌两遍的风险。
+     */
+    val transcriptHasNewer: Boolean = false,
+    /**
+     * 「回到最新」的次数。每跳一次 +1。
+     *
+     * <p>为什么不能只靠 [transcriptPrependRevision]：跳回最新是**替换**整份 transcript，
+     * 当时的滚动位置会跟着失效，所以必须显式落底一次。而补历史那一侧的要求正好相反
+     * （绝不能吸底），两者不能共用一个计数。
+     */
+    val transcriptJumpRevision: Int = 0,
     val tab: WorkspaceTab = WorkspaceTab.CHAT,
     val composerText: String = "",
     val composerBusy: Boolean = false,
+    /**
+     * 停止指令**已经发出**、但还没收到引擎的回合结束确认。
+     *
+     * <p>它和 [composerBusy] 不是同一件事，所以必须是两个字段：
+     * `composerBusy` 是"引擎在跑"，`stopping` 是"我们在等它停"。
+     *
+     * <p>停止键的可见性看的是 `composerBusy || stopping`（见 Composer 的说明）：
+     * 只要还在等确认，红色的停止键就**留在原地**，用户能再按一次重发中断。
+     * 早先的做法是按下就 `composerBusy = false`，键当场消失，而命令可能还在跑
+     * （`setsid` 子进程 + 上游超时 30 秒起、包管理器 1 小时），
+     * 于是"停不下来"变成了"连按都没得按，只能清后台"。
+     */
+    val stopping: Boolean = false,
     /**
      * 预输入**队列**（复刻原版 `engine.steerPrompt` 的排队语义）。
      *

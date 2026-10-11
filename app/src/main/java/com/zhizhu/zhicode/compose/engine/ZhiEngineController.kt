@@ -28,7 +28,6 @@ import com.zhizhu.zhicode.compose.model.readChatImageBlocks
 import com.termux.app.zhicode.storage.ApiSettingsStore
 import com.termux.app.zhicode.tasks.TaskStore
 import org.json.JSONObject
-import java.io.File
 import java.util.LinkedHashMap
 import java.util.concurrent.Executors
 
@@ -318,8 +317,8 @@ internal class ZhiEngineController(
         }
     }
 
-    fun resumeConversation(file: File) {
-        require(file.isFile) { "会话文件不存在：${file.absolutePath}" }
+    fun resumeConversation(sessionId: String) {
+        require(sessionId.isNotBlank()) { "会话标识为空" }
         generation++
         synchronized(deltaLock) {
             pendingText.setLength(0)
@@ -341,7 +340,7 @@ internal class ZhiEngineController(
         val genAtSubmit = generation
         engineOps.execute {
             if (generation != genAtSubmit) return@execute
-            runCatching { engine().resumeConversation(file) }
+            runCatching { engine().resumeConversation(sessionId) }
                 .onFailure { error ->
                     onMainForGeneration(genAtSubmit) {
                         events.onEngineError("恢复会话失败：${error.message ?: error}", error)
@@ -414,8 +413,20 @@ internal class ZhiEngineController(
 
     fun estimateContextTokens(): Int = runCatching { engine?.estimateContextTokens() ?: 0 }.getOrDefault(0)
 
-    /** 当前会话的 JSONL 文件。引擎尚未配置或还没写过内容时为 null。 */
-    fun sessionFile(): File? = runCatching { engine?.sessionFile }.getOrNull()
+    /** 当前会话的标识（`sessions.db` 里的 id）。引擎尚未配置或还没写过内容时为 null。 */
+    fun sessionId(): String? = runCatching { engine?.sessionId }.getOrNull()
+
+    /**
+     * 内存里这份引擎历史的规模 —— **只给诊断日志用**。
+     *
+     * <p>{@code historyChars} 会走一次全量序列化，所以这里刻意不把它放进任何
+     * 逐帧/循环路径：调用点只有"打开并恢复了一条会话"，一次一个数。
+     * 它回答的是这轮排查最关键的那个问题：**常驻到底是引擎的历史，还是界面那 200 条**。
+     */
+    fun memoryFootprint(): Pair<Int, Long> = runCatching {
+        val current = engine ?: return@runCatching 0 to -1L
+        current.messageCount() to current.historyChars()
+    }.getOrDefault(0 to -1L)
 
     fun hasMeasuredContextUsage(): Boolean =
         runCatching { engine?.hasMeasuredContextUsage() ?: false }.getOrDefault(false)

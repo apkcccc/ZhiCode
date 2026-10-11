@@ -113,6 +113,8 @@ import com.termux.app.zhicode.core.FileOps
 import com.termux.app.zhicode.core.PlanApprovalGate
 import com.termux.app.zhicode.core.StorageLinks
 import com.termux.app.zhicode.storage.ApiSettingsStore
+import com.termux.app.zhicode.storage.SessionStore
+import com.termux.app.zhicode.storage.ZhiMemory
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
@@ -132,7 +134,7 @@ import java.util.Locale
 /**
  * 主界面状态机。
  *
- * 数据来自 [WorkspaceRepository]（现在只剩终端占位横幅项）；对话流、工具执行、会话文件
+ * 数据来自 [WorkspaceRepository]（现在只剩终端占位横幅项）；对话流、工具执行、会话存储
  * 后续换成真实引擎实现即可，UI 层不用改。
  *
  * 继承 [AndroidViewModel] 而不是 `ViewModel`，是为了拿到 `Application`：
@@ -150,6 +152,36 @@ class WorkspaceViewModel(
 
     /** 真实 ZhiCode 引擎。懒创建，第一次发消息时才初始化。 */
     private val engine = ZhiEngineController(application, this)
+
+    /** 上次自动维护的墙上时间（毫秒）；只在打开侧栏时检查，避免把维护挂到热路径。 */
+    private var lastStorageMaintenanceAt = 0L
+    private val storageMaintenanceIntervalMs = 24L * 60L * 60L * 1000L
+
+    /**
+     * 停止看门狗；每次按停止重建，收到引擎的回合结束确认时取消。
+     *
+     * <p>用协程而不是 Handler：它跟着 viewModelScope 一起死，
+     * ViewModel 清掉之后不会有回调再落到已经销毁的界面上。
+     */
+    private var stopWatchdog: Job? = null
+
+    /**
+     * 这一轮已经按了几次停止。0 = 不在停止流程里。
+     *
+     * <p>进内存而不是进 StateFlow：界面只用得到"在不在停止中"（`stopping`），
+     * 次数只影响状态文案与"要不要清缓冲"，那是这一次调用内部的事。
+     */
+    private var stopAttempts = 0
+
+    /** 低频维护：打开侧栏时最多每天跑一次，重活始终在 IO 线程。 */
+    private fun maybeRunStorageMaintenance() {
+        val now = System.currentTimeMillis()
+        if (now - lastStorageMaintenanceAt < storageMaintenanceIntervalMs) return
+        lastStorageMaintenanceAt = now
+        viewModelScope.launch(Dispatchers.IO) {
+            SessionReader.maintain()
+        }
+    }
 
     // ------------------------------------------------------------------
     // 运行期状态（属于"这一轮正在发生什么"，不是界面状态，因此不进 StateFlow）
@@ -276,9 +308,9 @@ class WorkspaceViewModel(
             // 它由装环境时的 RuntimeInstaller 一并建好，见 [ensureWorkspace]。
             projectName = WorkspacePaths.nameOf(WorkspacePaths.defaultProject()),
             projectPath = WorkspacePaths.defaultProject(),
-            // 会话列表 / 对话历史 / 任务清单都来自磁盘，这里先给空值，
+            // 会话列表 / 对话历史 / 任务清单都来自存储，这里先给空值，
             // 由 [initSessionState] 在 IO 线程读好后填上。
-            // 不在构造器里同步读盘：会话 JSONL 可能有几千行，会拖慢启动。
+            // 不在构造器里同步读：一次长会话可能有上千条消息，会拖慢启动。
             sessions = emptyList(),
             activeSessionId = "",
             transcript = emptyList(),
@@ -1891,32 +1923,151 @@ class WorkspaceViewModel(
         )
     }
 
+    /**
+     * 停止当前回合（也是**唯一的重试入口**）。
+     *
+     * <h3>为什么不能按一下就宣布"已停止"</h3>
+     * `engine.cancel()` 只是把中断送到 agent 线程。真正把命令停掉要等工具执行栈收尾：
+     * 先读 pid、再对整个进程组发信号、确认退出、不行再强制杀（见 `TermuxShellExecutor`）。
+     * 这段收尾是**异步**的，而且可能很久 —— 命令正卡在一次不可中断的 IO 上时，
+     * 要等它自己的超时（HTTP/MCP 30 秒起，包管理器 1 小时）。
+     *
+     * <p>所以这里不再当场清 `composerBusy`（那会让停止键在按下的同一帧消失，
+     * 用户再也没有第二个能按的东西，最后只能清后台），而是进入 [WorkspaceUiState.stopping]：
+     * 停止键留在原地、状态写"正在停止…"，由引擎的 `onTurnComplete` 来收尾。
+     *
+     * <h3>再按一次是"重发中断"，不是重复动作</h3>
+     * 第二次之后不再清缓冲、不再重复把预输入放回输入框，只重发一次中断 ——
+     * 第一次的中断可能正好被一次在途 IO 吃掉（那正是"按了没反应"的常见成因）。
+     */
     fun stop() {
+        val snapshot = _state.value
+        // 什么都没跑时不进停止流程：否则会点亮一个"正在停止…"，
+        // 三秒后再由看门狗自己收掉 —— 无中生有的一句状态。
+        if (!snapshot.composerBusy && !snapshot.stopping
+            && snapshot.workingStatus == null && !engine.isBusy()) {
+            return
+        }
+        val attempt = stopAttempts + 1
+        stopAttempts = attempt
+        val firstAttempt = attempt == 1
+
         // 引擎的 cancel() 会一并取消权限/提问/计划三个门控，
         // 所以这里不需要再单独回执一次权限，只要把界面状态收干净。
         engine.cancel()
-        pendingPermissionId = null
-        // 在途的流式残片与工具进度缓冲全部丢弃：它们属于已经作废的这一轮。
-        progressBuffers.clear()
-        progressLastFlush.clear()
-        liveTools.clear()
-        currentGroupId = null
+        if (firstAttempt) {
+            pendingPermissionId = null
+            // 在途的流式残片与工具进度缓冲全部丢弃：它们属于已经作废的这一轮。
+            progressBuffers.clear()
+            progressLastFlush.clear()
+            liveTools.clear()
+            currentGroupId = null
+        }
         _state.update {
             // 停止时把还在排队的预输入**还原回输入框**（拼成多行逐条显示），
             // 而不是直接丢弃 —— 否则连发多条再按停止就会漏消息。
+            // 只在第一次做：第二次按的时候队列已经空了，再拼一次只会重复。
             val restored = it.pendingInputs.joinToString("\n") { q -> q.text }
             it.copy(
-                composerBusy = false,
-                workingStatus = null,
+                stopping = true,
+                // 保持忙碌态：真实状态就是"命令可能还在跑"。
+                composerBusy = true,
+                workingStatus = if (firstAttempt) {
+                    "正在停止当前任务…"
+                } else {
+                    "正在停止当前任务…（第 $attempt 次）"
+                },
                 permissionRequest = null,
-                busySessionIds = it.busySessionIds - it.activeSessionId,
                 composerText = if (restored.isNotEmpty()) restored else it.composerText,
                 pendingInputs = emptyList(),
-                message = if (it.pendingInputs.isNotEmpty()) {
-                    "已停止当前任务，${it.pendingInputs.size} 条预输入已放回输入框"
-                } else {
-                    "已停止当前任务"
+                message = when {
+                    firstAttempt && it.pendingInputs.isNotEmpty() ->
+                        "正在停止当前任务，${it.pendingInputs.size} 条预输入已放回输入框"
+                    firstAttempt -> "正在停止当前任务"
+                    else -> "已再次发送停止指令"
                 },
+            )
+        }
+        armStopWatchdog()
+    }
+
+    /**
+     * 停止看门狗：等待引擎的收尾确认，并且**不把界面锁死**。
+     *
+     * <p>正常情况几毫秒内就会回调 `onEngineTurnComplete`，这里只是兜底。
+     * 分两档，因为两种"慢"要区别对待：
+     *
+     * <ol>
+     *   <li>[STOP_CONFIRM_MS] 之后还在忙 —— 大概率是工具卡在一次不可中断的 IO 上。
+     *       只改状态文案，**保留**停止键，让用户能再按一次重发中断。</li>
+     *   <li>再等 [STOP_UNLOCK_MS] 仍未确认 —— 解锁输入框（`composerBusy = false`），
+     *       但仍然保留停止键（`stopping` 不变）。宁可让用户能继续打字，
+     *       也不要因为一次卡住的回合把整个界面冻住；也绝不说"已停止"，
+     *       因为那时候我们并不知道。</li>
+     * </ol>
+     */
+    private fun armStopWatchdog() {
+        stopWatchdog?.cancel()
+        stopWatchdog = viewModelScope.launch {
+            delay(STOP_CONFIRM_MS)
+            if (!isStopping()) return@launch
+            if (!engine.isBusy()) {
+                clearStopState("已停止当前任务")
+                return@launch
+            }
+            _state.update {
+                if (!it.stopping) it
+                else it.copy(
+                    workingStatus = "停止指令已发送，正在等待命令退出…",
+                    message = "命令没有立刻退出，可再点一次停止键重发中断",
+                )
+            }
+            delay(STOP_UNLOCK_MS)
+            if (!isStopping()) return@launch
+            if (!engine.isBusy()) {
+                clearStopState("已停止当前任务")
+                return@launch
+            }
+            // 见 KDoc 第 2 档：解锁输入，保留停止键。
+            _state.update {
+                if (!it.stopping) it
+                else it.copy(
+                    composerBusy = false,
+                    workingStatus = null,
+                    busySessionIds = it.busySessionIds - it.activeSessionId,
+                    message = "停止指令已发送，但命令仍在运行；可再次点击停止键重发中断",
+                    messageIsError = true,
+                )
+            }
+        }
+    }
+
+    private fun isStopping(): Boolean = stopAttempts > 0 && _state.value.stopping
+
+    /** 收掉停止流程的簿记（看门狗 + 计数）；不动界面状态本身。 */
+    private fun resetStopTracking() {
+        stopWatchdog?.cancel()
+        stopWatchdog = null
+        stopAttempts = 0
+    }
+
+    /**
+     * 停止流程结束（引擎确认收尾、或者看门狗判定它已经不忙了）。
+     *
+     * <p>[message] 为 null 表示不要动提示语 —— 正常完成的回合也走这里，
+     * 那时候说一句"已停止当前任务"就是假话。
+     */
+    private fun clearStopState(message: String? = null) {
+        resetStopTracking()
+        _state.update {
+            if (!it.stopping) it
+            else it.copy(
+                stopping = false,
+                composerBusy = false,
+                workingStatus = null,
+                busySessionIds = it.busySessionIds - it.activeSessionId,
+                message = message ?: it.message,
+                messageIsError = if (message == null) it.messageIsError else false,
             )
         }
     }
@@ -1936,8 +2087,12 @@ class WorkspaceViewModel(
         liveTools.clear()
         progressBuffers.clear()
         progressLastFlush.clear()
+        // 新回合开跑，上一轮的停止流程自动作废：看门狗若还挂着，
+        // 它几秒后会去问"停了没有"，而那时候已经在跑新任务了。
+        resetStopTracking()
         _state.update {
             it.copy(
+                stopping = false,
                 composerBusy = true,
                 workingStatus = "正在思考…",
                 busySessionIds = it.busySessionIds + it.activeSessionId,
@@ -2419,8 +2574,15 @@ class WorkspaceViewModel(
 
     override fun onEngineTurnComplete(stopReason: String) {
         finalizeStreaming(keepIfEmpty = false)
+        // 停止流程到此为止：引擎已经把这一轮收干净了（见 stop() 的说明）。
+        // 这里取消看门狗，所以"等一下就好"那条兜底路径不会再多说一句话。
+        resetStopTracking()
+        val cancelled = "cancelled".equals(stopReason, ignoreCase = true)
         _state.update { s ->
             s.copy(
+                // 只有"我们确实在等停止"且引擎报的是取消，才可以说已停止。
+                // 正常跑完的回合也走这个回调，那时候说"已停止"就是假话。
+                stopping = false,
                 composerBusy = false,
                 workingStatus = null,
                 busySessionIds = s.busySessionIds - s.activeSessionId,
@@ -2428,28 +2590,30 @@ class WorkspaceViewModel(
                 sessions = s.sessions.map { session ->
                     if (session.id == s.activeSessionId) session.copy(busy = false, updatedAtLabel = "刚刚") else session
                 },
+                message = if (cancelled && s.stopping) "已停止当前任务" else s.message,
+                messageIsError = if (cancelled && s.stopping) false else s.messageIsError,
             )
         }
-        // 第一轮结束后会话文件才真正落盘（引擎在 sendPrompt 里创建 SessionStore），
+        // 第一轮结束后会话才真正落库（引擎在 sendPrompt 里创建 SessionStore），
         // 所以这里必须重读列表，否则新会话在侧栏里不存在。
         syncActiveSessionFromDisk()
     }
 
     /**
-     * 回合结束后把当前会话对齐到磁盘状态。
+     * 回合结束后把当前会话对齐到库里状态。
      *
      * 做两件事：
      * 1. 重读会话列表 —— 让刚创建的会话出现、让标题/消息数/时间刷新；
-     * 2. 如果当前还没有 activeSessionId（刚 /new 过），把引擎刚写出的文件认领为当前会话。
+     * 2. 如果当前还没有 activeSessionId（刚 /new 过），把引擎刚创建的会话认领为当前会话。
      */
     private fun syncActiveSessionFromDisk() {
         viewModelScope.launch(Dispatchers.IO) {
             val sessions = SessionReader.list(_state.value.projectPath)
-            val sessionFile = engine.sessionFile()
+            val sessionId = engine.sessionId()
             _state.update { s ->
                 val activeId = when {
                     s.activeSessionId.isNotEmpty() -> s.activeSessionId
-                    sessionFile != null -> sessionFile.absolutePath
+                    sessionId != null -> sessionId
                     else -> ""
                 }
                 s.copy(sessions = sessions, activeSessionId = activeId)
@@ -2477,7 +2641,7 @@ class WorkspaceViewModel(
      * 所以这里再按会话 id 兜一道：本轮所属的会话已经不是当前会话时，直接丢弃，
      * 不去污染新会话。（用户的预期是"错误应当出现在出问题的那个会话里"，
      * 但它已经不在前台、内存里也没有它的 transcript，落不进去；
-     * 丢掉比串台正确 —— 那个会话下次打开时会从自己的文件重建。）
+     * 丢掉比串台正确 —— 那个会话下次打开时会从自己的记录重建。）
      */
     private fun finishTurnWithError(text: String) {
         val owner = turnSessionId
@@ -2485,6 +2649,9 @@ class WorkspaceViewModel(
         if (owner != null && owner != _state.value.activeSessionId) return
 
         finalizeStreaming(keepIfEmpty = false)
+        // 以错误收尾也算"停止流程结束了"：不取消看门狗的话，它几秒后还会
+        // 去问一个已经结束的回合，顺手把提示语改掉。
+        resetStopTracking()
         _state.update { s ->
             s.copy(
                 transcript = s.transcript + ChatItem(
@@ -2493,6 +2660,7 @@ class WorkspaceViewModel(
                     title = "错误",
                     body = text,
                 ),
+                stopping = false,
                 composerBusy = false,
                 workingStatus = null,
                 permissionRequest = null,
@@ -4337,7 +4505,7 @@ class WorkspaceViewModel(
                 choicePicker = ChoicePickerState(
                     title = "重命名会话",
                     intent = ChoiceIntent.SESSION_RENAME,
-                    prompt = "改一个你认得出的名字；只影响侧栏显示，不改会话文件本身。",
+                    prompt = "改一个你认得出的名字；只影响侧栏显示，不改会话内容本身。",
                     options = emptyList(),
                     allowFreeForm = true,
                     freeFormHint = session.title,
@@ -4346,12 +4514,11 @@ class WorkspaceViewModel(
         }
     }
 
-    /** 写入备注到磁盘。空字符串表示清除。 */
+    /** 写入备注到存储。空字符串表示清除。 */
     private fun saveSessionNote(session: SessionSummary, note: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val file = File(session.id)
             // titleOverride 传空串 = 不覆盖标题，只改备注。
-            val ok = SessionReader.updateMetadata(file, note, "")
+            val ok = SessionReader.updateMetadata(session.id, note, "")
             val sessions = SessionReader.list(_state.value.projectPath)
             _state.update {
                 it.copy(
@@ -4366,10 +4533,10 @@ class WorkspaceViewModel(
         }
     }
 
-    /** 写入标题覆盖到磁盘，备注原样保留。 */
+    /** 写入标题覆盖到存储，备注原样保留。 */
     private fun saveSessionTitle(session: SessionSummary, title: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val ok = SessionReader.updateMetadata(File(session.id), session.note, title)
+            val ok = SessionReader.updateMetadata(session.id, session.note, title)
             val sessions = SessionReader.list(_state.value.projectPath)
             _state.update {
                 it.copy(
@@ -4564,10 +4731,10 @@ class WorkspaceViewModel(
     /**
      * 新建会话。
      *
-     * 这里只重置引擎的对话上下文（新 workflowId），**不**立即建文件：
+     * 这里只重置引擎的对话上下文（新 workflowId），**不**立即建会话：
      * 引擎的 `SessionStore` 是在第一轮发消息时才创建的，提前建会留下
-     * 一堆"0 条消息"的空会话文件，侧栏会很快被垃圾填满。
-     * 所以界面上先插入一个占位条目，等第一轮结束后 [refreshSessions] 会用真实文件替换它。
+     * 一堆"0 条消息"的空会话，侧栏会很快被垃圾填满。
+     * 所以界面上先插入一个占位条目，等第一轮结束后 [refreshSessions] 会用真实会话替换它。
      */
     fun newSession() {
         engine.resetConversation()
@@ -4579,19 +4746,29 @@ class WorkspaceViewModel(
         progressBuffers.clear()
         progressLastFlush.clear()
         pendingPermissionId = null
+        // 换了会话，上一轮的停止流程不再属于任何东西：留着它会让新会话
+        // 一打开就显示"正在停止"，而且看门狗还会去问一个已经作废的回合。
+        resetStopTracking()
         _state.update {
             it.copy(
                 // 占位条目的 id 用空串而不是伪造 id：它不是真实文件，
                 // 若被当成路径去打开会失败，空串能让"打不开"这件事显式化。
                 activeSessionId = "",
+                stopping = false,
                 transcript = emptyList(),
+                transcriptHasOlder = false,
+                transcriptOldestSeq = -1L,
+                transcriptLoadingOlder = false,
+                transcriptPrependRevision = 0,
+                transcriptHasNewer = false,
+                transcriptJumpRevision = 0,
                 tasks = emptyList(),
                 contextTokens = 0,
                 composerBusy = false,
                 workingStatus = null,
                 tab = WorkspaceTab.CHAT,
                 sidebarOpen = false,
-                message = "已开始新会话，第一条消息会创建会话文件",
+                message = "已开始新会话，第一条消息会创建会话记录",
             )
         }
     }
@@ -4600,16 +4777,15 @@ class WorkspaceViewModel(
      * 打开一条历史会话。
      *
      * 两件事都要做，缺一不可：
-     * 1. `engine.resumeConversation(file)` —— 让**引擎**把历史装回 provider 上下文，
+     * 1. `engine.resumeConversation(sessionId)` —— 让**引擎**把历史装回 provider 上下文，
      *    否则界面上看得到历史、模型却不知道，追问会答非所问；
-     * 2. 从同一个 JSONL 重建界面 transcript。
+     * 2. 从同一个会话标识重建界面 transcript。
      *
-     * 文件读取放 IO 线程：一个长会话的 JSONL 可能有几千行，在主线程读会卡住界面。
+     * 读取放 IO 线程：一次长会话可能有上千条消息，在主线程读会卡住界面。
      */
     fun openSession(session: SessionSummary) {
-        val file = File(session.id)
-        if (!file.isFile) {
-            _state.update { it.copy(message = "会话文件不存在：${session.id}", messageIsError = true) }
+        if (session.id.isEmpty()) {
+            _state.update { it.copy(message = "会话标识为空，无法打开", messageIsError = true) }
             refreshSessions()
             return
         }
@@ -4625,23 +4801,50 @@ class WorkspaceViewModel(
         progressBuffers.clear()
         progressLastFlush.clear()
         pendingPermissionId = null
+        // 见 newSession()：换会话时停止流程一并作废。
+        resetStopTracking()
 
         _state.update { it.copy(sidebarOpen = false, tab = WorkspaceTab.CHAT, workingStatus = "正在载入会话…") }
         viewModelScope.launch(Dispatchers.IO) {
-            val transcript = SessionReader.transcript(file)
-            val tasks = SessionReader.tasks(file)
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            // 只读**最近一页**（`SessionReader.PAGE_MESSAGES` 条）＋完整任务清单。
+            // 早先这里是「一次读完整条会话」—— 一次长会话的内容块是几十 MB 量级，
+            // 真机上"打开一万条的长会话直接崩"就是这一步。往前翻页见 loadOlderTranscript。
+            val page = SessionReader.openPage(session.id)
+            ZhiMemory.log(
+                "openPage session=" + session.id +
+                    " n=" + page.items.size +
+                    " hasOlder=" + page.hasMore +
+                    " ms=" + (android.os.SystemClock.elapsedRealtime() - startedAt),
+            )
             // 引擎必须先配置好才有 config 可用，否则 resumeConversation 不会恢复项目/工作流。
             val resumed = runCatching {
                 engine.configure(engineOverrides())
-                engine.resumeConversation(file)
+                engine.resumeConversation(session.id)
             }
+            val footprint = engine.memoryFootprint()
+            ZhiMemory.log(
+                "resumeConversation session=" + session.id +
+                    " engineMsgs=" + footprint.first +
+                    " historyChars=" + ZhiMemory.size(footprint.second) +
+                    " ms=" + (android.os.SystemClock.elapsedRealtime() - startedAt),
+            )
             _state.update {
                 it.copy(
                     activeSessionId = session.id,
-                    transcript = transcript,
-                    tasks = tasks,
+                    transcript = page.items,
+                    transcriptHasOlder = page.hasMore,
+                    transcriptOldestSeq = page.oldestSeq,
+                    transcriptLoadingOlder = false,
+                    // 换了一条会话就重新计数：新会话的第一页不是"往前补"，
+                    // 列表必须无条件吸底（见 UiModels 里的说明）。
+                    transcriptPrependRevision = 0,
+                    transcriptHasNewer = false,
+                    transcriptJumpRevision = 0,
+                    tasks = page.tasks,
                     contextTokens = engine.estimateContextTokens(),
                     contextWindow = engine.contextWindowTokens().takeIf { w -> w > 0 } ?: it.contextWindow,
+                    stopping = false,
                     composerBusy = false,
                     workingStatus = null,
                     message = resumed.exceptionOrNull()?.let { error ->
@@ -4653,19 +4856,160 @@ class WorkspaceViewModel(
     }
 
     /**
+     * 往前补一页更早的历史（列表滚到顶时调用）。
+     *
+     * 三次进入都直接返回：正在加载、已经没有更早的、或者还没有打开会话。
+     * 它们是幂等的守卫 —— 列表滚动会连着触发很多次，不能每次都读一遍库。
+     */
+    fun loadOlderTranscript() {
+        val snapshot = _state.value
+        val sessionId = snapshot.activeSessionId
+        if (sessionId.isEmpty() || snapshot.transcriptLoadingOlder || !snapshot.transcriptHasOlder) return
+        val before = snapshot.transcriptOldestSeq
+        if (before <= 0L) {
+            _state.update { it.copy(transcriptHasOlder = false) }
+            return
+        }
+        _state.update { it.copy(transcriptLoadingOlder = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val page = SessionReader.olderPage(sessionId, before)
+            _state.update { current ->
+                // 读的过程中可能已经切走会话（或者又删了它）：那就把这一页丢掉，
+                // 绝不能把上一个会话的历史接到新会话头上。
+                if (current.activeSessionId != sessionId) {
+                    current.copy(transcriptLoadingOlder = false)
+                } else if (page == null || page.items.isEmpty()) {
+                    current.copy(transcriptLoadingOlder = false, transcriptHasOlder = false)
+                } else {
+                    val merged = SessionReader.merge(page.items, current.transcript)
+                    // 补页之后**必须**从尾部淘汰（见 trimResidentTail 的说明）：
+                    // 只加不减的话，用户往上翻完整条会话就等于把整条会话又装回内存。
+                    val kept = trimResidentTail(merged, current)
+                    ZhiMemory.log(
+                        "olderPage n=" + page.items.size +
+                            " held=" + kept.items.size +
+                            " trimmed=" + kept.trimmed +
+                            " hasOlder=" + page.hasMore,
+                    )
+                    current.copy(
+                        transcript = kept.items,
+                        transcriptHasNewer = current.transcriptHasNewer || kept.trimmed,
+                        transcriptHasOlder = page.hasMore,
+                        transcriptOldestSeq = page.oldestSeq,
+                        transcriptLoadingOlder = false,
+                        // 让列表知道这次变长是**往前补**的（见 UiModels 里的说明）。
+                        transcriptPrependRevision = current.transcriptPrependRevision + 1,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 回到最新：用**最新一页**替换常驻窗口，并把列表落到底。
+     *
+     * 这是"尾部被淘汰之后"唯一的回去路径（见 `UiModels.transcriptHasNewer`）。
+     * 之所以是**替换**而不是"再补一页"：替换不会把同一条消息灌两遍 ——
+     * 一轮回合结束后，同一条消息既在库里、也以实时条目留在内存里，
+     * 按 seq 往回补就会重复。
+     *
+     * <p><b>但实时条目必须留下。</b>库里那一页是"已经落盘的消息"，而正在流式输出的
+     * 气泡、正在跑的工具卡都还只在内存里。全部替换掉的话，用户点一下「回到最新」
+     * 就会看见自己的提问和正在回复的内容**凭空消失**。所以按既有的 id 约定
+     * （库读出来的 id 一律以 `session-` 开头，见 `SessionReader`）把实时条目摘出来，
+     * 接在库里那一页**后面** —— 它们本来就是最新的。
+     */
+    fun jumpToLatest() {
+        val sessionId = _state.value.activeSessionId
+        if (sessionId.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val page = SessionReader.openPage(sessionId)
+            ZhiMemory.log("jumpToLatest session=" + sessionId + " n=" + page.items.size)
+            _state.update { current ->
+                if (current.activeSessionId != sessionId) current
+                else current.copy(
+                    transcript = page.items + current.transcript.filterNot { it.id.startsWith("session-") },
+                    transcriptHasOlder = page.hasMore,
+                    transcriptHasNewer = false,
+                    transcriptOldestSeq = page.oldestSeq,
+                    transcriptLoadingOlder = false,
+                    // 计一次"往前补"，让列表**不要**为这次替换吸底 ——
+                    // 落底由 jumpRevision 单独驱动（替换会丢掉当时的滚动位置，
+                    // 必须显式落底，不能靠吸底那条路顺手带）。
+                    transcriptPrependRevision = current.transcriptPrependRevision + 1,
+                    transcriptJumpRevision = current.transcriptJumpRevision + 1,
+                    tasks = page.tasks,
+                )
+            }
+        }
+    }
+
+    /** [trimResidentTail] 的结果。 */
+    private class Trimmed(val items: List<ChatItem>, val trimmed: Boolean)
+
+    /**
+     * 常驻条数的上限。
+     *
+     * <p>取值理由：一屏看得见几条，600 条已经是几十屏的翻页量；而每一条的常驻成本
+     * 是正文 + 工具输出预览（正文不限、预览 8 KB），600 条量级在 10MB 以内 ——
+     * 相对 512MB 的堆完全可以忽略。上限存在的意义不是"省这一点"，而是**保证它不随
+     * 会话长度增长**。
+     */
+    private val maxResidentItems = 600
+
+    /**
+     * 超上限时从**尾部（最新那端）**淘汰。
+     *
+     * ## 为什么淘汰尾部而不是头部
+     *
+     * 用户会一路往上滚，所以被补进来的是头部；**离视口最远的那一端是尾部**。
+     * 淘汰头部等于把刚读进来的东西立刻扔掉（徒劳），淘汰尾部才是"把看不见的放掉"。
+     *
+     * ## 为什么"有回合在跑 / 有弹窗"时不动
+     *
+     * 权限询问、计划审批、选项选择、以及正在跑的工具，都靠 `id` 在 transcript 里
+     * 找回对应的那一条。淘汰掉那一条 = 弹窗点确认时找不到目标。所以这些状态下
+     * **宁可暂时超过上限**（上限不是硬保证，是稳态目标）。
+     */
+    private fun trimResidentTail(items: List<ChatItem>, state: WorkspaceUiState): Trimmed {
+        if (items.size <= maxResidentItems) return Trimmed(items, false)
+        val busy = state.workingStatus != null || state.composerBusy ||
+            state.permissionRequest != null || state.planApproval != null ||
+            state.choicePicker != null || pendingPermissionId != null
+        if (busy) return Trimmed(items, false)
+        // ⚠️ 复制一份而不是 `subList` 返回的**视图**：视图会一直抓着它背后那个
+        // 更长的数组，于是"淘汰掉"的那 200 条其实一条都没被释放 ——
+        // 淘汰就白做了。600 个引用的复制本身可以忽略。
+        return Trimmed(ArrayList(items.subList(0, maxResidentItems)), true)
+    }
+
+    /**
      * 删除会话。
      *
-     * 删除的是**磁盘上的文件**，不是列表里的一项 —— 只从列表移除的话，
+     * 删的是**存储里的会话**，不是列表里的一项 —— 只从列表移除的话，
      * 下次启动它又会回来，用户会以为删除没生效。
      */
     fun deleteSession(id: String) {
         if (id.isEmpty()) {
-            // 尚未落盘的占位会话：直接清掉当前视图即可。
-            _state.update { it.copy(activeSessionId = "", transcript = emptyList(), tasks = emptyList(), message = "会话已清空") }
+            // 尚未落库的占位会话：直接清掉当前视图即可。
+            _state.update {
+                it.copy(
+                    activeSessionId = "",
+                    transcript = emptyList(),
+                    transcriptHasOlder = false,
+                    transcriptOldestSeq = -1L,
+                    transcriptLoadingOlder = false,
+                    transcriptPrependRevision = 0,
+                    transcriptHasNewer = false,
+                    transcriptJumpRevision = 0,
+                    tasks = emptyList(),
+                    message = "会话已清空",
+                )
+            }
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
-            val removed = SessionReader.delete(File(id))
+            val removed = SessionReader.delete(id)
             val wasActive = _state.value.activeSessionId == id
             if (wasActive) {
                 engine.resetConversation()
@@ -4678,8 +5022,14 @@ class WorkspaceViewModel(
                     sessions = sessions,
                     activeSessionId = if (wasActive) "" else it.activeSessionId,
                     transcript = if (wasActive) emptyList() else it.transcript,
+                    transcriptHasOlder = if (wasActive) false else it.transcriptHasOlder,
+                    transcriptOldestSeq = if (wasActive) -1L else it.transcriptOldestSeq,
+                    transcriptLoadingOlder = if (wasActive) false else it.transcriptLoadingOlder,
+                    transcriptPrependRevision = if (wasActive) 0 else it.transcriptPrependRevision,
+                    transcriptHasNewer = if (wasActive) false else it.transcriptHasNewer,
+                    transcriptJumpRevision = if (wasActive) 0 else it.transcriptJumpRevision,
                     tasks = if (wasActive) emptyList() else it.tasks,
-                    message = if (removed) "会话已删除" else "删除失败：文件可能已被移除",
+                    message = if (removed) "会话已删除" else "删除失败：会话可能已被移除",
                 )
             }
             // 删除后仍留历史时，顺手把最近一条打开，避免出现"删完一片空白"。
@@ -4694,8 +5044,8 @@ class WorkspaceViewModel(
             val sessions = SessionReader.list(projectAtStart)
             _state.update { state ->
                 if (state.projectPath != projectAtStart) return@update state
-                // 保留"尚未落盘的新会话"这一状态：此刻 activeSessionId 为空且
-                // 列表里还没有对应文件，不能被列表刷新覆盖掉。
+                // 保留"尚未落库的新会话"这一状态：此刻 activeSessionId 为空且
+                // 列表里还没有对应会话，不能被列表刷新覆盖掉。
                 state.copy(sessions = sessions)
             }
         }
@@ -4704,11 +5054,68 @@ class WorkspaceViewModel(
 
 
     fun openSidebar() {
-        // 每次拉开侧栏都重读一次文件列表：新会话是在**第一轮消息之后**才落盘的，
+        // 每次拉开侧栏都重读一次会话列表：新会话是在**第一轮消息之后**才落库的，
         // 不刷新的话"刚聊完的会话"在侧栏里看不到。
         refreshSessions()
+        maybeRunStorageMaintenance()
         _state.update { it.copy(sidebarOpen = true) }
     }
+
+    /** 手动维护入口（设置/调试页用）。 */
+    fun maintainStorage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = SessionReader.maintain()
+            _state.update { it.copy(message = result, messageIsError = result.startsWith("维护失败")) }
+        }
+    }
+
+    /** 读取真实的存储占用报告（设置/调试页用）。 */
+    fun storageReport() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = SessionReader.storageReport()
+            _state.update { it.copy(message = report, messageIsError = report.startsWith("存储信息读不出来")) }
+        }
+    }
+
+    /** 把当前会话导出到系统文件选择器交给的 Uri。 */
+    fun exportSessionTo(uri: Uri) {
+        val sessionId = _state.value.activeSessionId
+        if (sessionId.isEmpty()) {
+            _state.update { it.copy(message = "没有打开的会话", messageIsError = true) }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val temp = File(cacheDir(), SessionStore.suggestedArchiveName(sessionId))
+                SessionStore.exportSession(sessionId, temp)
+                getApplication<Application>().contentResolver.openOutputStream(uri)?.use { output ->
+                    temp.inputStream().use { input -> input.copyTo(output) }
+                } ?: error("无法打开目标文件")
+                temp.delete()
+                "会话已导出"
+            }.getOrElse { "导出失败：" + (it.message ?: "未知原因") }
+            _state.update { it.copy(message = result, messageIsError = result.startsWith("导出失败")) }
+        }
+    }
+
+    /** 从系统文件选择器得到的 Uri 导入一条新会话。 */
+    fun importSessionFrom(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val temp = File(cacheDir(), "import-" + System.currentTimeMillis() + ".jsonl.gz")
+                getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                    temp.outputStream().use { output -> input.copyTo(output) }
+                } ?: error("无法读取归档")
+                val id = SessionStore.importSession(temp)
+                temp.delete()
+                refreshSessions()
+                "已导入会话：" + id.take(8)
+            }.getOrElse { "导入失败：" + (it.message ?: "未知原因") }
+            _state.update { it.copy(message = result, messageIsError = result.startsWith("导入失败")) }
+        }
+    }
+
+    private fun cacheDir(): File = getApplication<Application>().cacheDir
     fun closeSidebar() = _state.update { it.copy(sidebarOpen = false) }
 
     /**
@@ -5237,6 +5644,11 @@ class WorkspaceViewModel(
     // ---------- 对话流交互 ----------
 
     fun toggleToolExpanded(id: String) {
+        // 先决定"要展开还是收起"：只有从收起变展开、且这条带的是截断预览时才需要取全文。
+        val willExpand = _state.value.transcript
+            .firstOrNull { it.kind == ChatKind.TOOL_GROUP }
+            ?.tools?.firstOrNull { it.id == id }
+            ?.expanded != true
         _state.update { s ->
             s.copy(
                 transcript = s.transcript.map { item ->
@@ -5246,6 +5658,46 @@ class WorkspaceViewModel(
                     )
                 },
             )
+        }
+        if (willExpand) loadFullToolOutput(id)
+    }
+
+    /**
+     * 展开一条工具时把**完整输出**取回来。
+     *
+     * <p>列表里那份是截断过的预览（见 `SessionReader.OUTPUT_PREVIEW_CHARS`）——
+     * 一条会话里几百条工具的完整输出全部常驻内存，正是打开长会话 OOM 的主因。
+     * 所以全文按需取：命中 `content_blocks(session_id, tool_use_id)` 索引只读一行，
+     * 取回来后替换掉预览（`outputTruncated` 置回 false，之后不会再重复取）。
+     *
+     * <p>取失败（会话已删、记录里本来就只有预览）时什么都不做：保持预览，
+     * 而不是把输出清空 —— 后者看起来像"这条工具没有输出"。
+     */
+    private fun loadFullToolOutput(toolUseId: String) {
+        if (toolUseId.isEmpty()) return
+        val sessionId = _state.value.activeSessionId
+        if (sessionId.isEmpty()) return
+        val already = _state.value.transcript
+            .firstOrNull { it.kind == ChatKind.TOOL_GROUP }
+            ?.tools?.firstOrNull { it.id == toolUseId }
+        if (already == null || !already.outputTruncated) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val full = SessionStore.readToolResult(sessionId, toolUseId)
+            if (full.isEmpty()) return@launch
+            _state.update { s ->
+                s.copy(
+                    transcript = s.transcript.map { item ->
+                        if (item.kind != ChatKind.TOOL_GROUP) item
+                        else item.copy(
+                            tools = item.tools.map { tool ->
+                                if (tool.id != toolUseId) tool
+                                else tool.copy(output = full, outputTruncated = false)
+                            },
+                        )
+                    },
+                )
+            }
         }
     }
 
@@ -5270,6 +5722,8 @@ class WorkspaceViewModel(
                 },
             )
         }
+        // 与 toggleToolExpanded 同一条规则：展开时按需取全文。
+        if (expanded) loadFullToolOutput(toolId)
     }
 
     /**
@@ -5853,6 +6307,24 @@ class WorkspaceViewModel(
 
         /** 工具实时输出落盘间隔：每条进程输出都改一次 StateFlow 会把界面拖垮。 */
         private const val PROGRESS_FLUSH_MS = 200L
+
+        /**
+         * 按下停止之后，等多久去问一次"到底停了没有"（第一档）。
+         *
+         * 3 秒是**兜底**而不是常态：正常收尾是毫秒级，`onEngineTurnComplete` 一到
+         * 看门狗就被取消了。设太短会在快速停止时刷出一句多余的提示。
+         */
+        private const val STOP_CONFIRM_MS = 3_000L
+
+        /**
+         * 第一档之后仍未确认时，再等多久就解锁输入框（第二档）。
+         *
+         * 取值依据是"哪些东西会拖这么久"：MCP / HTTP 这类不可中断的读，
+         * 单次超时是 30 秒；Bash 侧最长的是包管理器（1 小时下限）。
+         * 等到 9 秒还没确认，基本可以断定这不是"再等一下就好"，
+         * 与其把界面锁死，不如让用户能继续打字、同时保留停止键。
+         */
+        private const val STOP_UNLOCK_MS = 9_000L
 
         /** 助手气泡上保留的过程步骤条数上限（原版 12）。 */
         private const val PROCESS_STEP_LIMIT = 12

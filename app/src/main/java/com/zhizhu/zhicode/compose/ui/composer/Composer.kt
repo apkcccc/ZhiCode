@@ -423,9 +423,14 @@ fun Composer(
 
                 Spacer(modifier = Modifier.width(8.dp))
                 // 停止键在任务运行时滑入，位置就在发送键左边
+                //
+                // 可见性看的是 `composerBusy || stopping`：停止指令发出后引擎还在收尾
+                // （Bash 子进程要等 pid 与超时，最长能到分钟级），那一整段时间里
+                // 这个键必须**留着**——它是用户唯一能重发中断的入口。
+                // 只看 composerBusy 的话它会在按下的同一帧消失（见 UiModels.stopping）。
                 AnimatedVisibility(
 
-                    visible = state.composerBusy,
+                    visible = state.composerBusy || state.stopping,
                     enter = fadeIn(ZhiMotion.fadeInSpec) + expandHorizontally(ZhiMotion.sizeSpec) +
                         scaleIn(initialScale = 0.7f, animationSpec = ZhiMotion.scaleEnterSpec),
                     exit = fadeOut(ZhiMotion.fadeOutSpec) + shrinkHorizontally(ZhiMotion.sizeSpec) +
@@ -433,7 +438,11 @@ fun Composer(
                 ) {
                     ZhiFilledIconButton(
                         icon = ZhiIcons.stop,
-                        description = "立即停止当前任务",
+                        description = if (state.stopping) {
+                            "停止指令已发出，再次点击会重发中断"
+                        } else {
+                            "立即停止当前任务"
+                        },
                         onClick = onStop,
                         // 走主题的 error 语义色而不是写死的红：浅色模式会自动换成暗红，
                         // 前景也必须是 onError，否则浅色下红底白字对比度不足。

@@ -2,6 +2,7 @@ package com.termux.app.zhicode.termux;
 
 import android.content.Context;
 
+import com.termux.app.zhicode.storage.ZhiMemory;
 import com.termux.shared.termux.TermuxConstants;
 import com.zhizhu.zhicode.sandbox.SandboxShell;
 
@@ -122,9 +123,15 @@ public final class TermuxShellExecutor {
          *
          * <p>两者都空时给 {@code (no output)} 而不是空串：屏幕上「什么都没有」
          * 与「工具没跑」看起来一样。
+         *
+         * <p>容量**必须先算出来**。两个流各自的上限是 {@link #MAX_CAPTURE_CHARS}
+         * （每个 2M 字符），不预分配的话 StringBuilder 会一路翻倍扩容，
+         * 每次扩容都要把已有内容整段复制一遍 —— 合并一份 4M 字符的输出会额外
+         * 产生几十兆的临时垃圾，而这正发生在「一条大输出的命令刚跑完」的时刻。
          */
         public String combined() {
-            StringBuilder out = new StringBuilder();
+            int expected = stdout.length() + stderr.length() + STDERR_HEADER.length() + 16;
+            StringBuilder out = new StringBuilder(Math.max(16, expected));
             if (!stdout.isEmpty()) out.append(stdout);
             if (!stderr.isEmpty()) {
                 if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
@@ -221,6 +228,8 @@ public final class TermuxShellExecutor {
         boolean interrupted = false;
         boolean terminationRequested = false;
         boolean isolateProcessGroup = false;
+        // 见 catch 块：收尾期间清掉中断位，跑完在 finally 末尾还回去。
+        boolean deferredInterrupt = false;
 
         try {
             File tempDirectory = new File(prefix + "/tmp");
@@ -252,16 +261,14 @@ public final class TermuxShellExecutor {
 
             if (timedOut) {
                 terminationRequested = true;
-                terminateExecution(asRoot, isolateProcessGroup, readPidWithGrace(pidFile), process,
+                terminateAndConfirm(asRoot, isolateProcessGroup, pidFile, process, completion,
                     listener, "命令超时，正在停止 Bash 子进程…");
-                completion.awaitProcessExit(THREAD_JOIN_MS);
             } else if (completion.source() == BashCompletionCoordinator.Source.CONTROL
                     && !completion.awaitProcessExit(CONTROL_EXIT_GRACE_MS)) {
                 // wrapper 报告完了、进程却还在：说明它留下了后台子进程。
                 terminationRequested = true;
-                terminateExecution(asRoot, isolateProcessGroup, readPidWithGrace(pidFile), process,
+                terminateAndConfirm(asRoot, isolateProcessGroup, pidFile, process, completion,
                     listener, "命令已完成，正在清理遗留 Bash 进程…");
-                completion.awaitProcessExit(THREAD_JOIN_MS);
             }
 
             stopCaptures(stdout, stderr, process, controlWatcher, controlThread, outThread, errThread, waiter);
@@ -275,14 +282,38 @@ public final class TermuxShellExecutor {
         } catch (InterruptedException cancelled) {
             interrupted = true;
             terminationRequested = true;
-            terminateExecution(asRoot, isolateProcessGroup, readPidWithGrace(pidFile), process,
+            /*
+             * ⚠️ 收尾之前**先清掉中断位**，收尾全部跑完再还回去。
+             *
+             * 取消其实是**两次**中断：`ZhiCodeEngine.cancel()` 先 `Future.cancel(true)`
+             * 再 `worker.interrupt()`。第一次被 awaitCompletion 消费掉（标志随之清除），
+             * 第二次可能正好落在下面这段收尾里 —— 而收尾要轮询 pid 文件、要 join 线程、
+             * 要 sleep。带着中断位的这些调用**每一个都会立刻抛**：
+             *   · pid 读不到 → 终止从"杀整个进程组"降级成"只 SIGTERM 直接子进程"，
+             *     而那个直接子进程是 setsid，它一死，真正的命令就在自己的会话里活下来；
+             *   · join 全部变成空操作 → 连"它有没有退出"都不再确认。
+             *
+             * 这就是"按下停止、工具却一直不停，最后只能把应用杀掉"的来源。
+             * 收尾必须完整跑一遍，所以这里清掉标志；跑完在 finally 末尾还回去，
+             * 让上层看到的仍然是"被取消"。
+             */
+            deferredInterrupt = Thread.interrupted();
+            terminateAndConfirm(asRoot, isolateProcessGroup, pidFile, process, completion,
                 listener, "任务已取消，正在停止 Bash 子进程…");
             throw cancelled;
         } finally {
             // 任何异常/取消路径都不能让 apt/dpkg 活过 Bash 父进程。
-            if (process != null && !completion.processExited() && !terminationRequested) {
-                terminateExecution(asRoot, isolateProcessGroup, readPidWithGrace(pidFile), process,
-                    listener, interrupted ? null : "正在清理 Bash 子进程…");
+            if (process != null && !completion.processExited()) {
+                if (!terminationRequested) {
+                    terminateAndConfirm(asRoot, isolateProcessGroup, pidFile, process, completion,
+                        listener, interrupted ? null : "正在清理 Bash 子进程…");
+                } else if (!awaitExitQuietly(completion, CONTROL_EXIT_GRACE_MS)) {
+                    // 取消/超时那条路径已经杀过一次，可它**还活着**。
+                    // 旧实现这里什么都不做（`terminationRequested` 已经为真），
+                    // 于是那唯一一次失败就永久生效 —— 命令跑到自己的超时为止。
+                    // 现在补一次强制终止，并留下日志。
+                    forceKill(asRoot, isolateProcessGroup, pidFile, process, completion, listener);
+                }
             }
             closeProcessStreams(process);
             if (stdout != null) stdout.close();
@@ -295,6 +326,8 @@ public final class TermuxShellExecutor {
             joinThread(waiter, CONTROL_EXIT_GRACE_MS);
             deleteQuietly(pidFile);
             deleteQuietly(controlFile);
+            // 见 catch 块：收尾期间中断位是清掉的，跑完再还回去。
+            if (deferredInterrupt) Thread.currentThread().interrupt();
         }
     }
 
@@ -649,19 +682,39 @@ public final class TermuxShellExecutor {
     }
 
     /** 等 pid 文件里出现一个有效的 pid（或到点放弃）。 */
+    /**
+     * 读 pid 文件，短暂等待它出现。
+     *
+     * <h3>为什么中断**不能**让它放弃</h3>
+     *
+     * <p>这个 pid 是"能不能杀掉整棵进程树"的唯一依据：拿到它，{@link #terminateExecution}
+     * 就能用负 pid 杀整个进程组（{@link #terminateProcessGroup}）；拿不到，
+     * 就只剩 {@code Process.destroy()} —— 而那只会 SIGTERM **直接子进程**。
+     * 而直接子进程是 {@code setsid}（见 {@link #buildProcess}）：
+     * 它一死，真正在跑的 {@code apt} / {@code gradle} 就在自己的会话里活下来了，
+     * 谁也不会再去碰它。
+     *
+     * <p>所以这里遇到中断**只记下、不返回 -1**：取消路径本身就要靠这次读到的 pid
+     * 才能把命令干掉，因为一个"顺手设置的中断位"而降低终止强度，等于让取消失效。
+     * 中断位在返回前还回去，调用方看到的仍然是"被中断"。
+     */
     private static int readPidWithGrace(File file) {
         long deadline = System.currentTimeMillis() + PID_FILE_GRACE_MS;
+        boolean restoreInterrupt = false;
+        int pid;
         while (true) {
-            int pid = readPid(file);
-            if (pid > 1) return pid;
-            if (System.currentTimeMillis() >= deadline) return -1;
+            pid = readPid(file);
+            if (pid > 1) break;
+            if (System.currentTimeMillis() >= deadline) break;
             try {
                 Thread.sleep(20L);
             } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return -1;
+                // 不放弃读 pid：清掉标志继续轮询，退出前再还回去。
+                restoreInterrupt = true;
             }
         }
+        if (restoreInterrupt) Thread.currentThread().interrupt();
+        return pid;
     }
 
     private static int readPid(File file) {
@@ -805,6 +858,69 @@ public final class TermuxShellExecutor {
         if (pid > 1) killRootProcessTree(pid);
         destroyQuietly(fallback);
     }
+
+    /**
+     * 终止并**确认**命令真的死了；第一次没杀掉就再强制来一次。
+     *
+     * <h3>为什么必须「确认」</h3>
+     *
+     * <p>这是「按下停止，工具却不停，最后只能把应用杀掉」那条反馈的根因。
+     * 旧实现的结构是：一次 {@link #terminateExecution} → 直接抛/返回，
+     * 而 {@code finally} 里那句清理**看到 {@code terminationRequested} 已经为真就跳过**。
+     * 于是只要那唯一一次杀失败，就再也没有第二次机会 ——
+     * 命令会一直跑到它自己的超时（默认 120 秒，构建类下限 15 分钟，
+     * 包管理类下限 **1 小时**，上限 2 小时）。用户看到的就是"工具不会停止"。
+     *
+     * <p>杀一次失败的原因都是真实存在的：pid 没读到（只能 SIGTERM 直接子进程，
+     * 而它是 {@code setsid}）、信号发给了错误的进程组、或者命令在被杀之前又拉起了子进程。
+     * 所以这里在第一次之后**等一小会儿确认**，没死就再杀一次，
+     * 并把这件事记进日志（{@code ZhiCodeMem}）与对话流 —— 它下次再发生才查得动。
+     */
+    private static void terminateAndConfirm(boolean asRoot, boolean processGroup, File pidFile, Process process,
+                                            BashCompletionCoordinator completion, OutputListener listener,
+                                            String note) {
+        int pid = readPidWithGrace(pidFile);
+        terminateExecution(asRoot, processGroup, pid, process, listener, note);
+        if (awaitExitQuietly(completion, TERMINATION_CONFIRM_MS)) return;
+        forceKill(asRoot, processGroup, pidFile, process, completion, listener);
+    }
+
+    /**
+     * 兜底强制终止：不等待 pid 文件，读到什么就用什么。
+     *
+     * <p>与 {@link #terminateAndConfirm} 的区别是它**不做第一次尝试**，只负责"再杀一次"，
+     * 所以可以用在 {@code finally} 里而不引入额外延迟。
+     */
+    private static void forceKill(boolean asRoot, boolean processGroup, File pidFile, Process process,
+                                  BashCompletionCoordinator completion, OutputListener listener) {
+        int pid = readPid(pidFile);
+        ZhiMemory.log("bashForceKill pid=" + pid + " processGroup=" + processGroup + " root=" + asRoot);
+        notify(listener, "\n[ZhiCode] 命令没有退出，正在强制终止进程树…\n");
+        if (pid > 1) {
+            terminateExecution(asRoot, processGroup, pid, process, null, null);
+        } else {
+            // pid 读不到 —— 只能退化成杀直接子进程。这一步在 setsid 模式下**杀不掉**
+            // 真正的命令，所以它后面必须留给用户一个明确的痕迹，而不是静默失败。
+            destroyQuietly(process);
+        }
+        awaitExitQuietly(completion, TERMINATION_CONFIRM_MS);
+    }
+
+    /** 等进程退出；被中断时只记下并还原标志，不提前返回（见 {@link #terminateAndConfirm}）。 */
+    private static boolean awaitExitQuietly(BashCompletionCoordinator completion, long timeoutMs) {
+        boolean restoreInterrupt = false;
+        try {
+            return completion.awaitProcessExit(timeoutMs);
+        } catch (InterruptedException interrupted) {
+            restoreInterrupt = true;
+            return completion.processExited();
+        } finally {
+            if (restoreInterrupt) Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 见 {@link #terminateAndConfirm}：第一次杀完之后等多久才算"没杀掉"。 */
+    private static final long TERMINATION_CONFIRM_MS = 600L;
 
     /** 借助进程组终止：setid 让整棵树在同一个组里，负号表示「发给整组」。 */
     private static void terminateProcessGroup(int pid) {

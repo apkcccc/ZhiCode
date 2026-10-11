@@ -168,7 +168,17 @@ private class MdStreamSplit(val settled: String, val tail: String)
  * 一个很大的回复长期占住进程级缓存。
  */
 private object MarkdownBlockCache {
-    private const val MaxEntries = 12
+    /**
+     * 缓存多少条**定稿正文**的块解析结果。
+     *
+     * <p>原先只有 12。`LazyColumn` 会回收组合，滚回去一条历史消息就要重新整篇解析 ——
+     * 而解析会分配整棵块 AST 与跨段 `AnnotatedString`。真机日志里滑动长会话的分配速率
+     * 约 33MB/s、单次 GC 总耗时最高 794ms，这条路径贡献了一份。
+     *
+     * <p>抬到 48 是安全的：真正的内存闸门是下面的 [MaxSourceChars]（源文本总字符数），
+     * 条数只是"能记住几条"的上限。短消息多了不会撑爆缓存，长消息仍会按字符数被挤出去。
+     */
+    private const val MaxEntries = 48
     private const val MaxSourceChars = 512 * 1024
     private const val MaxCacheableSourceChars = 128 * 1024
 

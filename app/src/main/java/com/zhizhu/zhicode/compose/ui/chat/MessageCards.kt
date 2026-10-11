@@ -131,6 +131,63 @@ fun EmptyState() {
     }
 }
 
+/**
+ * 列表顶部「上面还有更早的历史」的占位。
+ *
+ * 恢复一条会话时只读最近若干条消息（见 `SessionReader.PAGE_MESSAGES`），滚到顶会
+ * 自动往前补一页。这一条既是提示（上面不是没有内容，而是还没取），也是状态
+ * （正在取），否则用户滚到顶只会看到内容突然停住，像是记录缺了一块。
+ */
+@Composable
+fun OlderLoader(loading: Boolean) {
+    val scheme = MiuixTheme.colorScheme
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, end = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (loading) "正在加载更早的消息…" else "上面还有更早的消息",
+            color = scheme.onBackgroundVariant,
+            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+        )
+    }
+}
+
+/**
+ * 列表末尾的「回到最新」。
+ *
+ * 常驻窗口有上限（`WorkspaceViewModel.maxResidentItems`），往上翻到一定深度之后
+ * **最新那一段会被淘汰出内存**。这时列表的"最后一条"已经不是最新消息了，
+ * 所以需要一个明确的返回入口 —— 没有它，用户往下滚只会滚到历史中间，
+ * 看起来像"后面的消息丢了"。
+ *
+ * 放在列表**末尾**而不是做悬浮按钮：末尾正好是用户滚到底时看到的位置，
+ * 而悬浮按钮会和输入器上方的悬浮任务卡抢同一块地方。
+ */
+@Composable
+fun JumpToLatest(onJumpToLatest: () -> Unit) {
+    val scheme = MiuixTheme.colorScheme
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp, end = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Surface(
+            onClick = onJumpToLatest,
+            color = scheme.surfaceContainerHigh,
+            contentColor = scheme.primary,
+            shape = RoundedCornerShape(ZhiRadius.inner),
+        ) {
+            Text(
+                text = "回到最新",
+                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 /** 用户消息气泡，右对齐。长按触发操作菜单。 */
 @Composable
 fun UserBubble(item: ChatItem, onLongPress: () -> Unit) {

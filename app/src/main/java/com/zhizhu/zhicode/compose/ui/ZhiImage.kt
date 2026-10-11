@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import com.zhizhu.zhicode.compose.data.SessionReader
 import com.zhizhu.zhicode.compose.model.ChatImage
 import com.zhizhu.zhicode.compose.theme.ZhiRadius
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
@@ -136,20 +137,69 @@ private fun decode(base64: String, reqWidth: Int, reqHeight: Int): Decoded {
  *
  * 用**字节数**做上限而不是条数：一张缩略图可能 20 KB，也可能 2 MB，
  * 按条数限制在两种极端的图上都会做出错误决定。
+ *
+ * <h3>容量为什么按堆算，而不是写死 8MB</h3>
+ * 原先写死 `8 * 1024 * 1024`，而记账用的是 4 字节/像素。真机日志给出的实际尺寸是
+ * **540×1200**（一张竖屏截图经 `sampleSizeFor(1080,2400,520,280)` 降采样后的结果）——
+ * 一项就是 `540*1200*4 = 2.47MB`，**8MB 只装得下 3.24 项**。
+ *
+ * 于是滚动时：第 4 张图进来就把第 1 张挤出去，滚回去又要重新解码一次
+ * （`Base64.decode` 约 1.4MB + 位图 1.24MB 的瞬时分配）。日志里
+ * 「18 秒 24 次 GC、分配速率约 33MB/s」的抖动，这条路径贡献了一份。
+ *
+ * 现在按可用堆定容：`largeHeap` 之后上限是 512MB，取 1/12 约 42MB，
+ * 足以留住十几张缩略图；同时封顶 48MB，免得在超大堆设备上无限膨胀。
  */
-private val imageCache = object : LruCache<String, Decoded>(8 * 1024 * 1024) {
+private val imageCache = object : LruCache<String, Decoded>(imageCacheBudgetBytes()) {
     override fun sizeOf(key: String, value: Decoded): Int {
         // 没有位图的条目（解码失败 / 只量到尺寸）没有真实内存占用，
         // 但不能记 0：LruCache 靠 size 决定淘汰，全 0 就永远不淘汰，
         // 这种条目会无限积累。给一个名义值让它仍然能被挤出去。
         val bitmap = value.bitmap ?: return 1024
-        return bitmap.height * bitmap.width * 4
+        // 记账用 RGB_565 的**真实**占用（2 字节/像素，见 [decode] 里的 inPreferredConfig）。
+        // 原先记 4 字节/像素是保守的（更早淘汰、更省内存），但同时让缓存能装的张数
+        // 比实际能装的一半还少 —— 那正是"滚回去就重新解码"的来源。
+        return bitmap.height * bitmap.width * 2
     }
+}
+
+/** 图片缓存预算：堆的 1/12，最少 8MB、最多 48MB。 */
+private fun imageCacheBudgetBytes(): Int {
+    val heap = runCatching { Runtime.getRuntime().maxMemory() }.getOrDefault(0L)
+    if (heap <= 0L) return 8 * 1024 * 1024
+    val twelfth = heap / 12
+    return twelfth.coerceIn(8L * 1024 * 1024, 48L * 1024 * 1024).toInt()
 }
 
 /** 缓存键：内容本身（base64 很长，取哈希）+ 目标尺寸。 */
 private fun cacheKey(data: String, reqWidth: Int, reqHeight: Int): String =
     "${data.hashCode()}:${data.length}:${reqWidth}x$reqHeight"
+
+/**
+ * 缓存键：**按图的位置**，而不是按它的字节。
+ *
+ * 历史图片的内存里没有字节（见 [ChatImage.origin]），所以哈希一个不存在的字符串
+ * 是没意义的；位置本身就是全局唯一的，而且比 base64 短得多。
+ *
+ * 尺寸仍然进 key：同一张图在缩略图和放大查看里是两个不同的位图。
+ */
+private fun cacheKeyFor(image: ChatImage, reqWidth: Int, reqHeight: Int): String {
+    val origin = image.origin
+    return if (origin == null) cacheKey(image.data, reqWidth, reqHeight)
+    else "img:${origin.sessionId}:${origin.messageSeq}:${origin.ordinal}:${reqWidth}x$reqHeight"
+}
+
+/**
+ * 拿到这张图真正要解码的字节。
+ *
+ * 历史图片的 base64 留在库里，只在真要画这一张时取一次 —— 这一步会读文件并解码，
+ * 所以由调用方放在 `Dispatchers.Default` 上跑。缓存命中、滚动经过都不走这里。
+ */
+private suspend fun resolveImageData(image: ChatImage): String {
+    if (image.data.isNotEmpty()) return image.data
+    val origin = image.origin ?: return ""
+    return withContext(Dispatchers.Default) { SessionReader.imageData(origin) }
+}
 
 /**
  * 解码一张图（带缓存与降采样）。
@@ -183,7 +233,7 @@ internal class DecodeState(
 
 @Composable
 internal fun rememberDecodeState(image: ChatImage, reqWidth: Int, reqHeight: Int): DecodeState {
-    val key = cacheKey(image.data, reqWidth, reqHeight)
+    val key = cacheKeyFor(image, reqWidth, reqHeight)
     // 缓存命中时同步返回，不闪一下占位。
     val cached = remember(key) { imageCache.get(key) }
     val state by produceState(
@@ -192,7 +242,14 @@ internal fun rememberDecodeState(image: ChatImage, reqWidth: Int, reqHeight: Int
         key1 = key,
     ) {
         if (cached != null) return@produceState
-        val decoded = withContext(Dispatchers.Default) { decode(image.data, reqWidth, reqHeight) }
+        // 历史图片的字节不在内存里（见 [ChatImage.origin]）：第一步是把它取回来。
+        // 取不到就按失败处理 —— 界面上会显示文件名，而不是永远转圈。
+        val data = resolveImageData(image)
+        if (data.isEmpty()) {
+            value = DecodeState(null, true)
+            return@produceState
+        }
+        val decoded = withContext(Dispatchers.Default) { decode(data, reqWidth, reqHeight) }
         imageCache.put(key, decoded)
         value = DecodeState(decoded.bitmap, decoded.bitmap == null, decoded.sourceWidth, decoded.sourceHeight)
     }

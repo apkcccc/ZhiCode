@@ -240,10 +240,27 @@ public final class SubagentManager {
         return awaitForegroundResult(task, definition);
     }
 
-    /** 前台调用：等任务结束，然后把它的结果（或失败原因）作为工具结果返回。 */
+    /**
+     * 前台调用：等任务结束，然后把它的结果（或失败原因）作为工具结果返回。
+     *
+     * <h3>为什么被中断时一定要顺手取消任务</h3>
+     *
+     * <p>等在这里的是**父代理的 agent 线程**。用户按「停止」时被打断的正是这个线程
+     * （{@code ZhiCodeEngine.cancel()} → {@code worker.interrupt()}），
+     * 于是 {@code done.await()} 抛出 {@code InterruptedException}，这个方法就返回了 ——
+     * 而<b>子代理自己还在另一个线程上跑</b>，继续执行它的 Bash / 编辑文件。
+     *
+     * <p>旧实现就是这样：父代理显示"已取消"，子代理的命令照跑不误，界面上那张
+     * 工具卡一直在转，用户只能把应用杀掉。所以这里先把任务真正取消掉，再把中断抛上去。
+     */
     private ToolExecutionResult awaitForegroundResult(AgentTask task, AgentDefinition definition)
             throws InterruptedException {
-        task.done.await();
+        try {
+            task.done.await();
+        } catch (InterruptedException cancelled) {
+            if (AgentTask.STATUS_RUNNING.equals(task.status)) cancelTask(task);
+            throw cancelled;
+        }
         if (AgentTask.STATUS_FAILED.equals(task.status)) {
             String detail = task.error == null ? task.output.toString() : task.error.toString();
             return ToolExecutionResult.error("Agent " + definition.name + " failed: " + detail);
@@ -388,7 +405,8 @@ public final class SubagentManager {
             @Override public void onTurnComplete(String reason) {
                 boolean cancelled = "cancelled".equals(reason);
                 finish(task, cancelled ? AgentTask.STATUS_CANCELLED : AgentTask.STATUS_COMPLETED, reason, null);
-                task.sessionFile = task.engine == null ? null : task.engine.getSessionFile();
+                task.sessionId = task.engine == null || task.engine.getSessionId() == null
+                        ? "" : task.engine.getSessionId();
                 persist(task);
             }
 

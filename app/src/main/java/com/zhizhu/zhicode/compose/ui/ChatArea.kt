@@ -183,6 +183,12 @@ internal fun ChatArea(
             anchoredMenu = { anchorId, fingerOffset ->
                 ZhiAnchoredMenuHost(state, viewModel, anchorId, fingerOffset)
             },
+            // 列表滚到顶时往前补一页更早的历史。恢复历史是分页的，重复调用由
+            // ViewModel 里的守卫挡掉（"正在加载"/"已经没有更早的"）。
+            onLoadOlder = viewModel::loadOlderTranscript,
+            // 常驻窗口的尾部被淘汰过时，末尾的「回到最新」和"发送时人还在历史里"
+            // 都会走到这里（用最新一页替换整份 transcript）。
+            onLoadLatest = viewModel::jumpToLatest,
             modifier = glass.capture(Modifier.fillMaxSize()),
             // 底部留白 = 实测的悬浮层高度 + 一点余量：让被盖住的内容也能滑上来。
             // 顶部留白：S1 重构后顶栏在 topBar 槽位已由 Scaffold padding 处理，

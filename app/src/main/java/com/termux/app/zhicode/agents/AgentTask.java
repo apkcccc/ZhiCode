@@ -17,7 +17,7 @@ import java.util.concurrent.Future;
  *   <li><b>界面要的状态</b>：{@link #status} / {@link #progress} / {@link #output}；</li>
  *   <li><b>调度要的句柄</b>：{@link #future}（取消）、{@link #done}（等待结束）、
  *       {@link #engine}（往里投递后续指令）；</li>
- *   <li><b>恢复要的痕迹</b>：{@link #sessionFile} / {@link #worktreePath}。</li>
+ *   <li><b>恢复要的痕迹</b>：{@link #sessionId} / {@link #worktreePath}。</li>
  * </ol>
  * 拆成三个对象意味着它们之间要有一致的更新顺序，而这里的更新本身就来自
  * 多个线程（工作线程写、界面线程读），合并成一个对象 + volatile 字段更省事。
@@ -56,8 +56,8 @@ public final class AgentTask {
     public volatile Throwable error;
     public volatile ZhiCodeEngine engine;
     public volatile Future<?> future;
-    /** 子代理的会话文件；尚未创建时为 null。 */
-    public volatile File sessionFile;
+    /** 子代理的会话标识（{@code sessions.db} 里的 id）；尚未创建时为空串。 */
+    public volatile String sessionId = "";
     /** 隔离工作树的路径；空串表示没有隔离。 */
     public volatile String worktreePath = "";
 
@@ -90,7 +90,7 @@ public final class AgentTask {
                 .put("finished_at", finishedAt)
                 .put("output", output.toString())
                 .put("worktree", worktreePath);
-            if (sessionFile != null) json.put("session_file", sessionFile.getAbsolutePath());
+            if (sessionId != null && !sessionId.isEmpty()) json.put("session_id", sessionId);
             if (error != null) json.put("error", String.valueOf(error));
         } catch (Exception ignored) {
             // 见上：快照失败不升级成任务失败。

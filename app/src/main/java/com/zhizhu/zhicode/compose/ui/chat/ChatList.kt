@@ -25,6 +25,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +79,15 @@ private data class ContentStamp(
     val tools: Int,
     val session: String,
     val status: String?,
+    /**
+     * 往前补过多少页（见 `WorkspaceUiState.transcriptPrependRevision`）。
+     *
+     * 用它区分「**前面**补了历史」与「后面来了新内容」：两者都会让列表变长，
+     * 但只有后者该吸底 —— 前者吸底会把用户刚滚上去的历史一把甩掉。
+     *
+     * 不靠"首项变了"去猜：重新打开同一条会话时首项也会变，而那次是该吸底的。
+     */
+    val prepend: Int,
 )
 
 /** 对话流，对应原版 renderChat() + addTranscriptWindow()。 */
@@ -117,6 +127,21 @@ fun ChatList(
      * 而不是固定贴条目的边。
      */
     anchoredMenu: @Composable (String, DpOffset?) -> Unit,
+    /**
+     * 列表滚到顶、而上面还有没读进来的历史时调用一次。
+     *
+     * 恢复历史是分页的（见 `SessionReader.PAGE_MESSAGES`），所以"顶上还有"这件事
+     * 只有列表自己知道（它才知道用户滚到了哪）。重复调用是安全的：ViewModel 里
+     * 有「正在加载 / 已经没有更早的」两道守卫。
+     */
+    onLoadOlder: () -> Unit = {},
+    /**
+     * 「回到最新」：常驻窗口的尾部被淘汰过、最新消息不在内存里时调用。
+     *
+     * 由两处触发：列表底部的 chip，以及"发送时人还在历史里"（见上面滚动令牌那段）。
+     * ViewModel 侧会用**最新一页替换**整份 transcript，所以这里不需要游标。
+     */
+    onLoadLatest: () -> Unit = {},
     modifier: Modifier = Modifier,
     /**
      * 列表底部预留的高度。悬浮的任务/状态卡会盖住列表下部，
@@ -159,6 +184,10 @@ fun ChatList(
     ZhiFrameTrace.countRecompose("ChatList")
     val listState = rememberLazyListState()
     val currentState by rememberUpdatedState(state)
+    // 分页回调也走 rememberUpdatedState：那个长驻的 snapshotFlow effect 不该因为
+    // 宿主每帧传进来一个新的 lambda 就被重启（重启会丢掉"上次观察到的三元组"）。
+    val onLoadOlderState by rememberUpdatedState(onLoadOlder)
+    val onLoadLatestState by rememberUpdatedState(onLoadLatest)
 
     /*
      * 是否跟随最新内容（吸底）。
@@ -201,7 +230,11 @@ fun ChatList(
     LaunchedEffect(state.scrollToBottomToken) {
         if (state.scrollToBottomToken == lastScrollToken) return@LaunchedEffect
         lastScrollToken = state.scrollToBottomToken
-        requestScrollToBottom(listState)
+        // ⚠️ 尾部被淘汰过时**不能**滚到底：那时列表最后一条不是最新消息，
+        // 滚过去只会停在历史中间，看起来像"发了消息却没反应"。
+        // 这种情况要走「回到最新」（替换整份 transcript），落底由下面那条
+        // transcriptJumpRevision 的 effect 负责 —— 它才拿得到替换后的新列表。
+        if (currentState.transcriptHasNewer) onLoadLatestState() else requestScrollToBottom(listState)
     }
 
     /*
@@ -212,6 +245,73 @@ fun ChatList(
      * 两者用同一个标记区分：`activeSessionId` 变了就是“换会话了”，无条件滚。
      */
     var lastSessionId by remember { mutableStateOf(state.activeSessionId) }
+
+    /*
+     * 上一次看到的"往前补历史"计数。与 [lastSessionId] 配套：会话没变而计数变了，
+     * 说明这次变长是**前面**补的，不是来了新消息。见 [ContentStamp.prepend]。
+     */
+    var lastPrepend by remember { mutableStateOf(state.transcriptPrependRevision) }
+
+    /*
+     * 「回到最新」之后显式落底。
+     *
+     * 单独一条 effect，因为它是**替换**：整份 transcript 换掉之后，刚才的滚动位置
+     * 指向的那个条目已经不在列表里了，LazyColumn 会把位置夹到某一项上 ——
+     * 落底必须显式做，不能靠吸底那条路顺手带（那条路会被"这次是往前补"的判据挡掉）。
+     *
+     * 只在**回到底部**之后才做，否则列表还没测出高度，`requestScrollToItem(total-1)`
+     * 拿到的 total 可能是 0 或旧值。
+     */
+    var lastJump by remember { mutableStateOf(state.transcriptJumpRevision) }
+    LaunchedEffect(state.transcriptJumpRevision) {
+        if (state.transcriptJumpRevision == lastJump) return@LaunchedEffect
+        lastJump = state.transcriptJumpRevision
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it > 0 }
+        withFrameNanos { }
+        requestScrollToBottom(listState)
+    }
+
+    /*
+     * 滚到顶部就往前补一页历史。
+     *
+     * 判据是 `(贴顶, 上面还有, 正在加载, 本次贴顶还没补过)`。
+     *
+     *  · 只贴顶不算数 —— 上方本来就没有更早的内容时贴顶是常态；
+     *  · 正在加载时不算数 —— 否则滚动会连着触发很多次，每次都读一遍库；
+     *  · **一次到达顶端只补一页**（`loadedAtTop`）—— 这一条是保险丝，不是优化。
+     *
+     * 为什么要那根保险丝：`LazyColumn` 在头部插入内容之后会把滚动锚点重新定位到
+     * 原来那条上（它按 `key` 找回第一可见项的下标），于是列表通常**不再贴顶**，
+     * 用户往上看时自然会再触发一次 —— 这正是想要的节奏。
+     * 但如果某个版本/某个状态下锚点没有移动，`贴顶` 会一直是真，
+     * 而"补完一页"又把 `loading` 从 true 变回 false（三元组变值 → 再触发），
+     * 结果就是**一口气把整条会话从库里读一遍**：内存不会涨（尾部会淘汰），
+     * 但读者是白读的，一万条的会话要多花几百毫秒。
+     * 加了它之后最坏情况是"要再滚一下才能继续往前翻"，代价可以接受。
+     *
+     * ⚠️ 不要把它放宽成"只要贴顶就补"：那就是"打开会话就自动把整条历史读回来"，
+     * 正是这一轮要消灭的东西。
+     */
+    var loadedAtTop by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
+            .distinctUntilChanged()
+            .collect { atTop ->
+                // 离开顶端就重新上膛：再滚回来时可以再补一页。
+                if (!atTop) {
+                    loadedAtTop = false
+                    return@collect
+                }
+                if (loadedAtTop || !currentState.transcriptHasOlder || currentState.transcriptLoadingOlder) {
+                    return@collect
+                }
+                loadedAtTop = true
+                onLoadOlderState()
+            }
+    }
 
     /*
      * 自动吸底。
@@ -256,14 +356,23 @@ fun ChatList(
                 tools = last?.tools?.size ?: -1,
                 session = s.activeSessionId,
                 status = s.workingStatus,
+                prepend = s.transcriptPrependRevision,
             )
         }.collect { stamp ->
             // LazyColumn 实际画的是 blocks，不能由 transcript.size 推算索引；
             // 多条消息合并为一个回合时，真实尾项只由 totalItemsCount 决定。
             val switched = stamp.session != lastSessionId
             lastSessionId = stamp.session
+            // 只是往前补了一页历史就不吸底（见 [ContentStamp.prepend]）。
+            // ⚠️ 判定要在写入新值**之前**做，而且要排除切会话那一次 ——
+            // 新会话的第一页同样带着一次计数变化。
+            val prepended = !switched && stamp.prepend != lastPrepend
+            lastPrepend = stamp.prepend
             if (listState.layoutInfo.totalItemsCount <= 0) return@collect
-            if (switched || autoFollowState.value) requestScrollToBottom(listState)
+            // 尾部被淘汰过时也不吸底：那时"最后一条"不是最新消息，
+            // 吸过去等于把用户钉在历史中间（而且要回到最新得整份替换，见 jump effect）。
+            if (currentState.transcriptHasNewer) return@collect
+            if (switched || (autoFollowState.value && !prepended)) requestScrollToBottom(listState)
         }
     }
 
@@ -344,6 +453,16 @@ fun ChatList(
         ) {
             if (state.transcript.isEmpty()) {
                 item { EmptyState() }
+            }
+            // ---- 顶上还有更早的历史时的占位 -----------------------------------
+            //
+            // 恢复历史是分页的（见 `SessionReader.PAGE_MESSAGES`）：这一条既是"上面还有"
+            // 的提示，也是"正在取"的反馈 —— 没有它的话，用户滚到顶只会看到内容突然停住，
+            // 像是记录缺了一块。
+            if (state.transcriptHasOlder) {
+                item(key = "older-loader", contentType = "older-loader") {
+                    OlderLoader(loading = state.transcriptLoadingOlder)
+                }
             }
             // ---- 按「块」渲染 -------------------------------------------------
             //
@@ -490,6 +609,12 @@ fun ChatList(
             if (debugMode && debugTasks.isNotEmpty()) {
                 item(key = "debug-tasks", contentType = "debug-task-list") {
                     InlineTaskList(debugTasks)
+                }
+            }
+            // 尾部被淘汰过：末尾给一个明确的"回到最新"，否则用户往下滚只会停在历史中间。
+            if (state.transcriptHasNewer) {
+                item(key = "jump-to-latest", contentType = "jump-to-latest") {
+                    JumpToLatest(onJumpToLatest = onLoadLatestState)
                 }
             }
             // 任务进度与工作状态**不放在滚动区**（对应原版把它们挂在固定的
@@ -715,8 +840,14 @@ private fun InlineTaskList(tasks: List<AgentTask>) {
  *  · 只增不减，随一次会话的消息数增长。一条消息一个字符串，量级可忽略；
  *    换会话时不会清空，但 id 是唯一的，误判不会发生。
  *  · 只读主线程（组合期），所以不需要加锁。
+ *
+ * ⚠️ 上面那条"量级可忽略"的前提是**同一时刻只有一条会话被浏览**。真机上实测过
+ * 一万条会话的用法之后，这个前提要补一句：**换会话时必须换一份集合**，
+ * 否则跨会话累计的字符串是随"用过的会话数 × 每条的条数"增长的 ——
+ * 那是唯一还在无界增长的容器，而它没有任何功能上的理由要跨会话保留
+ * （`add` 的语义只是"这一条在本会话里以前见过吗"）。
  */
-private val seenMessageIds = HashSet<String>()
+private var seenMessageIds = HashSet<String>()
 
 /** 上一次播种 [seenMessageIds] 的会话 id；`null` = 还没有播种过。 */
 private var seenSeededSession: String? = null
@@ -727,6 +858,8 @@ private var seenSeededSession: String? = null
  * 播种 = 把**当时的** transcript 全部登记为已见过（它们是历史，不该补播动画）。
  * ⚠️ 只在会话**变了**的时候播种；同一个会话下反复调用只会把已有集合还回来 ——
  * 这一点正是上面那个 bug 的修复点。
+ *
+ * 换会话时**整个换掉**集合（而不是继续往同一个里加）：见 `seenMessageIds` 的说明。
  */
 private fun seenIdsFor(
     sessionId: String?,
@@ -734,6 +867,7 @@ private fun seenIdsFor(
 ): MutableSet<String> {
     if (seenSeededSession != sessionId) {
         seenSeededSession = sessionId
+        seenMessageIds = HashSet()
         seenMessageIds.addAll(transcript.map { it.id })
         // 探针：正常一次会话只会看到一行。若这里反复刷，说明会话 id 在抖动
         // （那会让每条消息都被当成"新的"而集体淡入，是另一种病）。

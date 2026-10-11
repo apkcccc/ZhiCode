@@ -178,6 +178,12 @@ private fun ZhiCodeScreen(
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) viewModel.refreshFiles()
     }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/gzip"),
+    ) { uri -> uri?.let(viewModel::exportSessionTo) }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(viewModel::importSessionFrom) }
     LaunchedEffect(state.pendingEditorOpen) {
         val path = state.pendingEditorOpen ?: return@LaunchedEffect
         viewModel.consumePendingEditorOpen()
@@ -559,6 +565,8 @@ private fun ZhiCodeScreen(
                 viewModel = viewModel,
                 glass = glass,
                 onBack = viewModel::closeUiDebug,
+                onExportSession = { name -> exportLauncher.launch(name) },
+                onImportSession = { importLauncher.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
             )
         }
     }

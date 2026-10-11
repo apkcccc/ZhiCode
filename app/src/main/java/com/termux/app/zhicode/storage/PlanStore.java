@@ -30,8 +30,8 @@ public final class PlanStore {
     private final File directory;
 
     public PlanStore(String projectDirectory) {
-        directory = new File(SessionStore.projectsDirectory(),
-            SessionStore.projectKey(projectDirectory) + File.separator + PLANS_DIR);
+        directory = new File(ProjectPaths.projectsDirectory(),
+            ProjectPaths.projectKey(projectDirectory) + File.separator + PLANS_DIR);
     }
 
     public File getDirectory() {

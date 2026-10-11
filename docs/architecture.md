@@ -18,7 +18,7 @@
 | 内置终端 | 自带 Termux bootstrap（`assets/bootstrap-aarch64.zip`）→ 真实 PTY（`TerminalSession` + `libtermux.so`） |
 | 虚拟化沙箱 | `Bcore/`（BlackBox 血统）+ 宿主层 `com/zhizhu/zhicode/sandbox/`（16 个类） |
 | MCP / 技能 / 角色卡 / 记忆 | `McpStore`、`McpRuntime`、`SkillStore`、`RoleCardStore`、`MemoryStore` |
-| 会话与任务 | `SessionStore`、`TaskStore`、`PlanStore` |
+| 会话与任务 | `SessionStore`（SQLite 单库）；`TaskStore`、`PlanStore`（仍是文件） |
 | 界面 | 全部走 Miuix；语义色、圆角与动画 token 集中在 `theme/` |
 
 ### 当前 UI 边界
@@ -72,6 +72,90 @@ app/src/main/assets/           bootstrap-aarch64.zip、zhicode/*.sh、sora/textm
 app/src/test/                  JVM 单测（**唯一**的测试入口）
 docs/  tools/                  本目录 / 度量与构建脚本
 ```
+
+### 会话数据存在哪里
+
+```
+~/.zhicode/
+├── sessions.db               会话唯一数据库（sessions / events / content_blocks /
+│                             context_snapshots / blobs / blob_refs / migration_log）
+├── blobs/aa/bb/<sha256>      ≥8 KB 的大内容，内容寻址、跨会话去重
+├── archives/*.jsonl.gz       用户主动导出的交换/备份文件（运行时不读取）
+├── projects/<项目键>/plans/   计划文本，仍是文件（PlanStore）
+└── tasks/<项目键>/            任务清单，一个任务一个文件（TaskStore）
+```
+
+> ⚠️ 注意 `tasks/` 在 `~/.zhicode/` **根下**，与 `projects/<项目键>/` 平级，
+> 而不是在 `projects/<项目键>/tasks/` 里 —— 见 `TaskStore` 构造器（`dataDir() + "tasks/" + key`）。
+> 这一行早先写错过，核对时请以代码为准。
+
+- **运行时没有 JSONL、没有分段日志、没有独立的列表索引库。** 会话列表就是 `sessions` 表上的一次
+  `ORDER BY updated_at DESC`，所以不存在「索引与正文不一致」这种状态。`.jsonl.gz` 只在用户主动
+  导出/导入时出现（`SessionArchive`）；它是交换格式，不是运行时格式。
+- 落盘不写 JSON 文本：引擎与协议层在内存里仍然用 `org.json`，入库时经
+  `BinaryValueCodec` 编成紧凑二进制（常用标量另拆原生列）。超过 8 KB 的完整块外置到
+  `blobs/aa/bb/<sha256>`，`blob_refs(session_id, hash)` 记录归属；同一份大内容跨会话只存一份。
+- 写入按 500 ms / 8 KB 攒批提交；用户消息、快照、改备注这类「丢不起」的写入立即提交。
+  Blob 先落文件再进事务，回收有 60 秒宽限期，避免"刚写还没挂引用"的竞态被误删。
+- schema v2 补了事件类型、工具结果、迁移记录、Blob 引用的索引；维护入口会分批回收孤儿 Blob，
+  并通过 `auto_vacuum=INCREMENTAL` / `incremental_vacuum` 让数据库文件最终能缩小。
+- 旧格式（v1 JSONL、v2 分段日志）只在 `LegacySessionImporter` 里被读一次，
+  **校验通过才删旧文件**；v2 manifest 的 `legacy_source` 会阻止同一份 JSONL 被重复导入，失败的原样保留并记进 `migration_log`。
+
+#### 读历史是分页的，而且**常驻有上限**
+
+一次长会话的内容块（工具输出、diff、图片 base64）是**几十 MB 量级**，整份读进内存再建界面
+模型会直接把堆撑爆（真机上表现为「打开一万条的长会话就崩」，崩在 binder 线程上、日志里
+一条应用栈都没有）。所以打开会话只读**最近 200 条消息**那一段：
+
+- 窗口的**下界**落在一个消息行上，并且会往前挪到「不会把一次工具调用切成两半」的位置 ——
+  工具结果行与它对应的 `tool_use` 常常是两条不同的消息，切开会让整条工具的输出凭空消失；
+- 列表滚到顶时往前补一页（`SessionReader.olderPage`），顶上显示「上面还有更早的消息」。
+  **一次到达顶端只补一页**：`LazyColumn` 在头部插入后会把锚点重新定位到原来那条上，
+  用户往上看时自然再触发一次；那根保险丝防的是"锚点没动 + 补完就能再补"导致一口气读完整条会话；
+- 补页之后**从尾部（最新那端）淘汰**，常驻上限 `WorkspaceViewModel.maxResidentItems`（600 条）。
+  ⚠️ 少了这一步，分页就是假的：只加载不淘汰，用户往上翻完整条会话等于把整条会话又装回内存 ——
+  真机日志上的表现是堆占用从 400 MB 一路抬到 508 MB / 512 MB（3% free），
+  然后每次分配都要排约 1 秒的 GC 队，掉帧 899 帧、输入延迟 4.6 秒；
+- 有回合在跑、或权限询问 / 计划审批 / 选项选择弹着时**不淘汰** —— 那些状态要按 id 在
+  transcript 里找回对应的那一条，淘汰掉它等于按确认时找不到目标；
+- 淘汰过之后列表末尾出现「回到最新」，由 `WorkspaceViewModel.jumpToLatest` 用**最新一页替换**
+  （替换而不是插入，所以不会把同一条消息灌两遍）。正在流式输出的气泡与正在跑的工具卡
+  还只在内存里、不在库里，所以替换时按既有的 id 约定（库读出来的 id 一律以 `session-` 开头）
+  把实时条目留下来接在后面；
+- **图片只带位置，不带字节**（`ChatImage.origin`）。窗口化读历史时存储层根本不解码图片块，
+  界面画到哪一张才按 `(session, messageSeq, ordinal)` 取哪一张（`SessionReader.imageData`）；
+- 引擎那一侧**仍读完整历史**（发请求要的是全量上下文）。
+
+#### 引擎侧的历史没有窗口化，这一条是已知的
+
+`ZhiCodeEngine` 的 `messages` 里始终是整条会话。上一节的三条节省（窗口化、尾部淘汰、
+图片按需取）都只作用于**界面**，所以「打开会话之后常驻约 400 MB」这件事仍在 ——
+真机日志里那 400 MB 是"刚打开、还没滚动"时就已经在了，正是这一段。
+
+两次重复拷贝已经去掉（`SessionStore.loadMessages` 不深拷贝、`mergeAdjacentRoles` 就地合并、
+`snapshotMessages` 不再做"序列化成字符串 + 每次重新解析"）。要把剩下这份常驻也压下来，
+只有两条路，两条都**改变模型看到的历史**，所以还没做：
+
+- **历史按紧凑编码常驻**（`BinaryValueCodec` 的字节），只在发请求/压缩那一小段时间物化对象树。
+  语义不变，内存约为原来的 1/10，代价是每次请求多一次解析；
+- **恢复时只装「最新压缩快照 + 最近 N 条」**。省得多，但模型看不到压缩点之前的原文。
+
+判断该走哪条之前，先看 `ZhiCodeMem` 那一行日志里的 `engineMsgs` 与 `historyChars` ——
+它们是这个决定的输入。
+
+#### 内存诊断：`ZhiCodeMem`
+
+release 包里也要能读，所以它**不受 `BuildConfig.DEBUG` 约束**（与 `ZhiFrameTrace` 相反）。
+只在关键节点打一行，不逐帧、不落文件：
+
+```
+ZhiCodeMem openPage session=… n=200 hasOlder=true ms=37 heap=402/512MB
+ZhiCodeMem resumeConversation session=… engineMsgs=10412 historyChars=7.3M ms=1841 heap=445/512MB
+ZhiCodeMem olderPage n=200 held=600 trimmed=true hasOlder=true heap=…
+```
+
+三个数回答三个问题：界面常驻了几条、引擎那份有多大、当时堆还剩多少。
 
 ---
 

@@ -1,6 +1,6 @@
 package com.termux.app.zhicode.tasks;
 
-import com.termux.app.zhicode.storage.SessionStore;
+import com.termux.app.zhicode.storage.ProjectPaths;
 import com.termux.shared.termux.TermuxConstants;
 
 import org.json.JSONArray;
@@ -192,8 +192,8 @@ public final class TaskStore {
      *        那是在这个字段存在之前写下的旧任务。
      */
     public TaskStore(String projectDirectory, String workflowId) {
-        String canonicalProject = SessionStore.canonicalProject(projectDirectory);
-        String key = SessionStore.projectKey(canonicalProject);
+        String canonicalProject = ProjectPaths.canonicalProject(projectDirectory);
+        String key = ProjectPaths.projectKey(canonicalProject);
         directory = new File(TermuxConstants.dataDir(), TASKS_DIR + "/" + key);
         highWaterFile = new File(directory, HIGH_WATER_FILE);
         versionFile = new File(directory, VERSION_FILE);

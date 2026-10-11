@@ -70,7 +70,18 @@
         android:usesCleartextTraffic="true"
         android:requestLegacyExternalStorage="true"
         android:extractNativeLibs="true"
+        android:largeHeap="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        <!--
+            largeHeap 是**止痛药，不是解药**。真机上这个应用原本的堆上限是 256MB
+            （日志里的 growth limit 268435456），打开长会话时会被顶满并 FATAL。
+            largeHeap 通常能把上限抬到约 512MB，让崩溃晚很多。
+
+            真正的修复在别处：会话加载不再重复读整份数据、工具输出在列表里只留
+            有界预览（展开时才取全文）、上下文用量估算不再每次重新序列化整份历史。
+            如果哪台设备上发现 largeHeap 带来的常驻内存不可接受，删掉这一行即可 ——
+            它不参与任何逻辑判断。
+        -->
 
         <!--
           与上游实现对齐：把 AndroidX Startup 自动并进来的这两个组件摘掉。

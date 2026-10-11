@@ -13,7 +13,7 @@ import com.termux.app.zhicode.api.zcode.ZcodeWire;
  *
  * <h3>{@link #wireName()} 是持久化字符串</h3>
  * 它被写进用户设置（{@code api_profiles_v1} 里每个配置的 {@code protocol} 字段）
- * 和会话 JSONL，所以这些字面量是**存盘格式的一部分**，不能随手改：
+ * 和会话内存模型，所以这些字面量是**协议/历史语义的一部分**，不能随手改：
  * 改了之后旧配置会被判成「未知协议」而拒绝加载。
  *
  * <h3>别名</h3>

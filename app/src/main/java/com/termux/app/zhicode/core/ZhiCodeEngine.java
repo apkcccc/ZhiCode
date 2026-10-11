@@ -17,6 +17,7 @@ import com.termux.app.zhicode.model.SessionConfig;
 import com.termux.app.zhicode.model.ToolCall;
 import com.termux.app.zhicode.model.ToolExecutionResult;
 import com.termux.app.zhicode.storage.PlanStore;
+import com.termux.app.zhicode.storage.ProjectPaths;
 import com.termux.app.zhicode.storage.SessionStore;
 import com.termux.app.zhicode.tasks.TaskStore;
 import com.termux.app.zhicode.tools.ToolRegistry;
@@ -240,10 +241,18 @@ public final class ZhiCodeEngine {
 
     /** 发给提供方的上下文。写入都在 agent 线程，读取（估算用量）在界面线程。 */
     private final JSONArray messages = new JSONArray();
-    /** 最近一次序列化的消息快照；只有历史版本变化时才重新序列化。 */
-    private volatile String cachedMessageSnapshotJson;
     private volatile int messageRevision;
-    private volatile int cachedMessageRevision = -1;
+    /**
+     * 配置版本。每次 {@code configure()} 与历史失效都会 +1。
+     *
+     * <p>存在的理由：{@link #estimateContextTokens} 的结果依赖配置（系统提示词、
+     * 工具 schema、是否启用视觉输入），但它没法便宜地比较两个 {@code SessionConfig}。
+     * 用一个只增不减的计数器代替比较，既准确又不用为估算加一次深比较。
+     */
+    private volatile long configRevision;
+    /** {@link #estimateContextTokens} 的结果缓存；key 见 {@link #estimateCacheKey()}。 */
+    private volatile String cachedEstimateKey;
+    private volatile int cachedEstimateTokens = -1;
     private volatile String cachedSystemPrompt;
     private volatile String cachedSystemPromptKey;
     private volatile JSONArray cachedToolSchemas;
@@ -385,6 +394,8 @@ public final class ZhiCodeEngine {
         cachedSystemPromptKey = null;
         cachedToolSchemas = null;
         cachedToolSchemasKey = null;
+        // 估算结果依赖配置（系统提示词 / 工具 schema / 视觉开关），换了配置就得重算。
+        configRevision++;
         bindTaskStore();
         invalidateMeasuredUsage();
     }
@@ -424,8 +435,14 @@ public final class ZhiCodeEngine {
         appendConfigEvent();
     }
 
-    public synchronized File getSessionFile() {
-        return sessionStore == null ? null : sessionStore.getSessionFile();
+    /**
+     * 当前会话的标识。引擎尚未配置或还没写过内容时为 null。
+     *
+     * <p>它以前叫 {@code getSessionFile()} 并返回一个 {@code File} ——
+     * 会话已经不再按文件存放，所以这里返回的是 {@code sessions.db} 里的会话标识。
+     */
+    public synchronized String getSessionId() {
+        return sessionStore == null ? null : sessionStore.getSessionId();
     }
 
     private void appendMessage(String role, JSONArray content) throws Exception {
@@ -444,21 +461,64 @@ public final class ZhiCodeEngine {
         synchronized (messageLock) {
             messages.put(message);
             messageRevision++;
-            cachedMessageSnapshotJson = null;
         }
         SessionStore store = sessionStore;
         if (store != null) store.appendMessage(role, content, messageId, turnId, origin);
     }
 
-    /** 本地历史的快照。发请求用的是快照，之后历史怎么改都不影响已经发出去的那次。 */
-    private JSONArray snapshotMessages() throws Exception {
+    /**
+     * 本地历史的快照。发请求用的是快照，之后历史怎么改都不影响已经发出去的那次。
+     *
+     * <h3>为什么不再走"序列化成一根字符串"</h3>
+     *
+     * <p>早先的实现是：把整份 {@link #messages} {@code toString()} 成一根长字符串缓存起来，
+     * 每次用的时候再 {@code new JSONArray(那根字符串)} 解析回来。它同时带来三笔开销：
+     *
+     * <ol>
+     *   <li>常驻一根与历史等长的字符串（Java 的 {@code String} 是 2 字节/字符，
+     *       所以是历史字节数的<span>两倍</span>量级）；</li>
+     *   <li>历史一变就重新序列化一次整份；</li>
+     *   <li><b>每次读取都全量重新解析一遍</b> —— 而它被读得很勤（发请求、上下文估算）。</li>
+     * </ol>
+     *
+     * <p>现在只在锁内逐条拷一层外壳：<b>消息对象</b>各新建一个（提供方与
+     * {@code VisionMessageFilter} 会按需改写它自己的那一层的 {@code content} 字段），
+     * 而 {@code content} 数组与里面的块按原引用共享 —— 两者都只被读。
+     * 这样既保住了"快照"这条语义，又不产生第二棵完整对象树。
+     */
+    private JSONArray snapshotMessages() {
         synchronized (messageLock) {
-            if (cachedMessageSnapshotJson == null || cachedMessageRevision != messageRevision) {
-                cachedMessageSnapshotJson = messages.toString();
-                cachedMessageRevision = messageRevision;
-            }
-            return new JSONArray(cachedMessageSnapshotJson);
+            return copyMessageShells(messages, 0, messages.length());
         }
+    }
+
+    /**
+     * 把 {@code [from, to)} 这一段消息拷成新的外壳，内的 {@code content} 按原引用共享。
+     *
+     * <p>键的个数是每条消息 2~4 个，所以每条消息只有几个小对象，
+     * 与"整份 JSON 文本 + 重新解析"不是一个量级。
+     */
+    private static JSONArray copyMessageShells(JSONArray source, int from, int to) {
+        JSONArray out = new JSONArray();
+        if (source == null) return out;
+        int start = Math.max(0, from);
+        int end = Math.min(source.length(), Math.max(start, to));
+        for (int i = start; i < end; i++) {
+            JSONObject message = source.optJSONObject(i);
+            if (message == null) continue;
+            JSONObject shell = new JSONObject();
+            java.util.Iterator<String> keys = message.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                try {
+                    shell.put(key, message.opt(key));
+                } catch (Exception ignored) {
+                    // 单个键写不进去就跳过：结构与类型不符时宁可少一个键，也不要整体失败。
+                }
+            }
+            out.put(shell);
+        }
+        return out;
     }
 
     /**
@@ -514,7 +574,7 @@ public final class ZhiCodeEngine {
         SessionConfig current = config;
         if (current == null || current.workflowId == null || current.workflowId.trim().isEmpty()) return;
 
-        String key = SessionStore.canonicalProject(current.projectDirectory) + "\n" + current.workflowId;
+        String key = ProjectPaths.canonicalProject(current.projectDirectory) + "\n" + current.workflowId;
         if (key.equals(boundTaskKey) && taskSubscription != null) return;
 
         TaskStore.Subscription previous = taskSubscription;
@@ -577,7 +637,6 @@ public final class ZhiCodeEngine {
         synchronized (messageLock) {
             clearMessagesLocked();
             messageRevision++;
-            cachedMessageSnapshotJson = null;
         }
         invalidateMeasuredUsage();
         consecutiveAutoCompactFailures = 0;
@@ -590,12 +649,14 @@ public final class ZhiCodeEngine {
     }
 
     /**
-     * 用磁盘上的历史替换内存里的历史。
+     * 用库里的历史替换内存里的历史。
      *
      * <p>先把「上一次运行」的残留全部清干净再读盘：被取消的那一轮可能留下一个
      * 已经作废的传输会话或执行快照，让它漏进新历史会得到一份自相矛盾的上下文。
+     *
+     * @param sessionId {@code sessions.db} 里的会话标识（不再是文件路径）
      */
-    public void resumeConversation(File file) throws Exception {
+    public void resumeConversation(String sessionId) throws Exception {
         cancel();
         steering.clear();
         activeProvider = null;
@@ -604,27 +665,26 @@ public final class ZhiCodeEngine {
         executingTool = false;
         executingModelRequest = false;
 
-        JSONArray restored = SessionStore.loadMessages(file);
+        JSONArray restored = SessionStore.loadMessages(sessionId);
         synchronized (messageLock) {
             clearMessagesLocked();
             for (int i = 0; i < restored.length(); i++) messages.put(restored.getJSONObject(i));
             messageRevision++;
-            cachedMessageSnapshotJson = null;
         }
         invalidateMeasuredUsage();
         consecutiveAutoCompactFailures = 0;
-        sessionStore = SessionStore.resume(file);
+        sessionStore = SessionStore.resume(sessionId);
         // 恢复出来的历史可能有半截工具链（上次是崩掉的），先自愈一次再给人看。
         repairToolHistory(REPAIR_BEFORE_MESSAGE, true);
 
         if (config != null) {
-            SessionStore.SessionSummary summary = SessionStore.summarize(file);
+            SessionStore.SessionSummary summary = SessionStore.summarize(sessionId);
             if (summary.project != null && !summary.project.trim().isEmpty()
                     && new File(summary.project).isDirectory()) {
                 config.projectDirectory = summary.project;
             }
-            config.workflowId = SessionStore.loadWorkflowId(file);
-            config.planWorkflowState = SessionStore.loadPlanState(file);
+            config.workflowId = SessionStore.loadWorkflowId(sessionId);
+            config.planWorkflowState = SessionStore.loadPlanState(sessionId);
             if (config.planWorkflowState.isAwaitingApproval()) {
                 // 审批是一次「当下」的对话。应用重启之后没有人还在等这个答复，
                 // 把状态停在 AWAITING_APPROVAL 会让界面显示一个永远等不到回应的按钮。
@@ -686,7 +746,6 @@ public final class ZhiCodeEngine {
         clearMessagesLocked();
         for (int i = 0; i < replacement.length(); i++) messages.put(replacement.getJSONObject(i));
         messageRevision++;
-        cachedMessageSnapshotJson = null;
     }
 
     // ------------------------------------------------------------ 上下文用量
@@ -697,31 +756,109 @@ public final class ZhiCodeEngine {
      * <p>优先用真实测量值：最近一次 API 响应报出的 input tokens 已经把系统提示词与
      * 工具 schema 算进去了 —— 那两块恰恰是纯按字数估算永远算不准的。所以有了测量值之后，
      * 只对「那次响应之后新增的消息」做估算，再把它加到测量值上。
+     *
+     * <h3>为什么读的是"活的"历史，而不是一份快照</h3>
+     *
+     * <p>这个函数是**只读**的。早先它却先 {@code messages.toString()}、再
+     * {@code new JSONArray(...)} 解析一整套回来，纯属白付两次全量开销 ——
+     * 而它被读得很勤（打开会话、每轮开始/结束都会读），在 256MB 堆的设备上
+     * 单次就能触发 OOM。现在直接在 {@link #messageLock} 内读 {@link #messages}：
+     * 为了拿到一致的长度与内容，读写都在同一把锁下完成。
+     *
+     * <h3>为什么结果要按 key 缓存</h3>
+     * 即便不再重建整棵树，估算仍要遍历一遍相关消息（{@code roughTokens}）。
+     * 而一次都没变的历史会被四处调用点反复重算。所以按「影响结果的每一项」做 key：
+     * 历史版本、是否启用视觉输入、测量值及其对应的消息条数、以及配置版本。
+     * 任一变化才重算，否则直接返回上次结果。这也是**纯缓存**：估算口径与缓存前逐字一致。
      */
     public int estimateContextTokens() {
-        JSONArray snapshot;
+        String key = estimateCacheKey();
+        if (key.equals(cachedEstimateKey)) {
+            int cached = cachedEstimateTokens;
+            if (cached >= 0) return cached;
+        }
+        int value = computeContextTokens();
+        cachedEstimateTokens = value;
+        cachedEstimateKey = key;
+        return value;
+    }
+
+    /** 估算结果的全部输入。小字符串，构造它是廉价的（相比重算整份历史）。 */
+    private String estimateCacheKey() {
+        SessionConfig current = config;
+        return messageRevision
+                + "|" + (current == null || current.visionEnabled)
+                + "|" + lastMeasuredContextTokens
+                + "|" + lastMeasuredMessageCount
+                + "|" + configRevision;
+    }
+
+    private int computeContextTokens() {
         long measuredTokens = lastMeasuredContextTokens;
         int measuredMessages = lastMeasuredMessageCount;
-        try {
-            snapshot = snapshotMessages();
-            SessionConfig current = config;
-            if (current != null && !current.visionEnabled) VisionMessageFilter.apply(snapshot, false);
-        } catch (Exception unreadable) {
-            return 0;
+        SessionConfig current = config;
+        boolean visionEnabled = current == null || current.visionEnabled;
+
+        int total;
+        int appended = 0;
+        int everything = 0;
+        boolean measurementUsable;
+        synchronized (messageLock) {
+            total = messages.length();
+            measurementUsable = measuredTokens >= 0 && measuredMessages >= 0 && measuredMessages <= total;
+            if (measurementUsable) {
+                // 只算「测量那次之后新增的」——这一段通常只有几条，与整份历史无关。
+                appended = ContextCompactor.roughTokens(messages, measuredMessages, total);
+            } else {
+                everything = ContextCompactor.roughTokens(messages);
+            }
         }
 
-        boolean measurementUsable = measuredTokens >= 0 && measuredMessages >= 0
-                && measuredMessages <= snapshot.length();
-        if (measurementUsable) {
-            long appended = ContextCompactor.roughTokens(snapshot, measuredMessages, snapshot.length());
-            return clampTokens(measuredTokens + appended);
+        if (!visionEnabled) {
+            // 关掉视觉时，实际发出去的报文里图片块会被换成一行文字占位，而本地历史里
+            // 还是图片块（每张按固定的 IMAGE_TOKENS 计）。不换成同一套口径，
+            // 估算会与真实请求差出「每张图 1200 token」那一块 —— 而估算正是自动压缩阈值的输入。
+            //
+            // 只对**增量那一段**做替换：测量值覆盖的部分是提供方按它自己收到的报文算的，
+            // 已经是"换过占位"的口径了。代价与新增消息条数成正比。
+            appended += visionPlaceholderDelta(measuredMessages, total, measurementUsable);
         }
-        return clampTokens(estimateWithoutMeasurement(snapshot));
+
+        if (measurementUsable) return clampTokens(measuredTokens + appended);
+        return clampTokens(estimateWithoutMeasurement(everything));
+    }
+
+    /**
+     * 「关掉视觉」之后那一段的口径差：占位文本的 token 数 − 图片块按 {@code IMAGE_TOKENS} 计的固定值。
+     *
+     * <p>只拷**那一段**消息的外壳，且 {@code VisionMessageFilter} 只会替换含图片的那几条的
+     * content 数组（不含图片的整条按原引用共享）—— 所以不会像整份拷贝那样把图片 base64 又抄一遍。
+     *
+     * <p>同一份拷出来的数据算两次：换占位之前、之后。两者之差就是这段的口径差。
+     * 这也正是"不去动整份历史"的原因 —— 前面已经按测量值算过的部分不该被重算。
+     */
+    private int visionPlaceholderDelta(int from, int total, boolean onlyTail) {
+        int start = onlyTail ? Math.max(0, from) : 0;
+        JSONArray tail;
+        try {
+            synchronized (messageLock) {
+                tail = copyMessageShells(messages, start, total);
+            }
+        } catch (Exception ignored) {
+            return 0;
+        }
+        int before = ContextCompactor.roughTokens(tail);
+        try {
+            VisionMessageFilter.apply(tail, false);
+        } catch (Exception ignored) {
+            return 0;
+        }
+        return ContextCompactor.roughTokens(tail) - before;
     }
 
     /** 没有测量值时的兜底估算：消息 + 系统提示词 + 工具 schema。 */
-    private long estimateWithoutMeasurement(JSONArray snapshot) {
-        long estimated = ContextCompactor.roughTokens(snapshot);
+    private long estimateWithoutMeasurement(int messageTokens) {
+        long estimated = messageTokens;
         SessionConfig current = config;
         if (current == null) return estimated;
         try {
@@ -773,6 +910,31 @@ public final class ZhiCodeEngine {
         synchronized (messageLock) {
             return lastMeasuredContextTokens >= 0 && lastMeasuredMessageCount >= 0
                     && lastMeasuredMessageCount <= messages.length();
+        }
+    }
+
+    /**
+     * 内存里这份历史的规模 —— **只给诊断日志用**。
+     *
+     * <p>{@link #historyChars} 报的是"如果把整份历史序列化成 JSON 会有多长"，
+     * 也就是常驻那棵树的最直观的量级。它**会走一次全量 {@code toString()}**，
+     * 所以只能由人在关键节点上调（打开/恢复会话），绝不可以放进任何循环或逐帧路径 ——
+     * 那正是本类这轮要消灭的那个开销。
+     */
+    public int messageCount() {
+        synchronized (messageLock) {
+            return messages.length();
+        }
+    }
+
+    /** 见 {@link #messageCount()} 的说明：这是一次全量序列化，只给诊断用。 */
+    public long historyChars() {
+        try {
+            synchronized (messageLock) {
+                return messages.toString().length();
+            }
+        } catch (Throwable ignored) {
+            return -1L;
         }
     }
 

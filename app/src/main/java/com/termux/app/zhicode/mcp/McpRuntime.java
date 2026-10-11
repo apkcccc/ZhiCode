@@ -3,6 +3,8 @@ package com.termux.app.zhicode.mcp;
 import com.termux.app.zhicode.json.JsonItems;
 import com.termux.app.zhicode.model.ToolExecutionResult;
 import com.termux.app.zhicode.storage.McpConfigStore;
+import com.termux.app.zhicode.storage.ZhiMemory;
+import com.termux.shared.termux.TermuxConstants;
 import com.zhizhu.zhicode.compose.BuildConfig;
 
 import org.json.JSONArray;
@@ -10,9 +12,12 @@ import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -50,9 +55,29 @@ public final class McpRuntime {
     private static final int READ_BUFFER_BYTES = 8192;
     /** 轮询间隔：{@link BufferedInputStream#available()} 不阻塞，所以要自己让出 CPU。 */
     private static final long POLL_INTERVAL_MS = 5L;
+    /** 挑响应时最多丢弃几条不是自己那条的消息，见 {@link #read}。 */
+    private static final int MAX_SKIPPED_MESSAGES = 8;
+    /** stderr 保留上限（尾部）；见 {@link StderrDrain}。 */
+    private static final int STDERR_CAPTURE_BYTES = 8 * 1024;
+    /** stderr 拼进错误信息时的字符上限：排障要的是原因，不是整段横幅。 */
+    private static final int STDERR_REPORT_CHARS = 600;
+    /** 杀进程之后等排空线程收尾的宽限期。 */
+    private static final long EXIT_DRAIN_GRACE_MS = 400L;
+    /** SSE 响应最多读多少行就算一个事件（防止畸形流把这里变成死循环）。 */
+    private static final int MAX_EVENT_LINES = 512;
+    /** Streamable HTTP 的 SSE 响应类型，见 {@link #readBody}。 */
+    private static final String EVENT_STREAM_TYPE = "text/event-stream";
+    /** 认不出来的内容块直接贴其 JSON 时的截断长度。 */
+    private static final int NON_TEXT_REPORT_CHARS = 2000;
+    /** 单次工具输出的字符上限，见 {@link #capContent}。 */
+    private static final int MAX_CONTENT_CHARS = 200_000;
+    private static final String CONTENT_TRUNCATED = "\n…[MCP 输出已截断]";
 
     private static final String KEY_SESSION_ID = "_session_id";
     private static final String HEADER_SESSION_ID = "Mcp-Session-Id";
+    /** 协商版本：initialize 结果里的字段名，也是后续请求的头名，见 {@link #overHttp}。 */
+    private static final String KEY_PROTOCOL_VERSION = "protocolVersion";
+    private static final String HEADER_PROTOCOL_VERSION = "MCP-Protocol-Version";
     private static final String METHOD_INITIALIZE = "initialize";
     private static final String METHOD_INITIALIZED = "notifications/initialized";
     private static final String METHOD_LIST_TOOLS = "tools/list";
@@ -97,6 +122,9 @@ public final class McpRuntime {
                 }
                 row.put("ok", true).put("tools", tools);
             } catch (Exception failure) {
+                // 一行日志：`mcp_list` 是「测试连接」唯一的落点，
+                // 界面上只会看到一句错误，原因得在这里留痕。
+                ZhiMemory.log("mcpList server=" + server.name + " failed=" + messageOf(failure));
                 try {
                     row.put("ok", false).put("error", messageOf(failure));
                 } catch (Exception ignored) {
@@ -124,6 +152,7 @@ public final class McpRuntime {
             return ToolExecutionResult.error(
                 "MCP tool disabled by user: " + serverName + "/" + toolName);
         }
+        long startedAt = System.currentTimeMillis();
         try {
             JSONObject params = new JSONObject()
                 .put("name", toolName)
@@ -134,12 +163,46 @@ public final class McpRuntime {
             // 前者是可预期的业务失败，后者是协议层失败。两者都要映射成工具失败，
             // 但只有后者会被上面的 catch 接住。
             if (result != null && result.optBoolean("isError", false)) {
-                return ToolExecutionResult.error(flattenContent(content));
+                String text = flattenContent(content);
+                log(server, toolName, startedAt, true);
+                // 失败但没有正文时不能给空字符串：空结果会被上层读成
+                // "命令没有输出"，而不是"这次调用失败了"。
+                return ToolExecutionResult.error(capContent(
+                    text.isEmpty() ? "MCP 工具报告失败，但没有返回原因" : text));
             }
-            return ToolExecutionResult.ok(flattenContent(content));
+            String text = capContent(flattenContent(content));
+            log(server, toolName, startedAt, false);
+            return ToolExecutionResult.ok(text);
         } catch (Exception failure) {
+            log(server, toolName, startedAt, true);
             return ToolExecutionResult.error("MCP call failed: " + messageOf(failure));
         }
+    }
+
+    /**
+     * 单次工具输出的长度闸门。
+     *
+     * <p>没有闸门时，一个"返回整份文件/整张表"的 MCP 服务器可以给出接近
+     * {@link #MAX_MESSAGE_BYTES} 的一条消息，而它会被**原样**存进会话、再原样发给模型：
+     * 512MB 堆上这是能直接把应用打死的一条路径。取值比 WebFetch 的 100000 宽松
+     * （MCP 返回结构化数据的场合更多），但远低于消息上限。
+     */
+    private static String capContent(String text) {
+        if (text == null || text.length() <= MAX_CONTENT_CHARS) return text == null ? "" : text;
+        return text.substring(0, MAX_CONTENT_CHARS) + CONTENT_TRUNCATED;
+    }
+
+    /**
+     * 一行诊断日志。
+     *
+     * <p>MCP 出问题时最先要看的就是「哪台服务器、哪个工具、花了多久」，
+     * 而这些信息在工具结果里是没有的（结果只有正文）。走 `ZhiMemory` 而不是
+     * `ZhiFrameTrace`：后者每个入口都被 `BuildConfig.DEBUG` 挡着，发布包里等于不存在，
+     * 而 MCP 恰恰是只在发布包里被用到的东西。
+     */
+    private static void log(McpConfigStore.Server server, String toolName, long startedAt, boolean failed) {
+        ZhiMemory.log("mcpCall server=" + server.name + " tool=" + toolName
+            + " ok=" + !failed + " ms=" + (System.currentTimeMillis() - startedAt));
     }
 
     /**
@@ -191,47 +254,105 @@ public final class McpRuntime {
             throw new IOException("MCP stdio command is empty");
         }
         ProcessBuilder builder = new ProcessBuilder(commandLine(server));
-        Map<String, String> environment = builder.environment();
-        applyPairs(environment, server.env);
+        applyEnvironment(builder.environment(), server.env);
         builder.redirectError(ProcessBuilder.Redirect.PIPE);
 
-        Process process = builder.start();
+        Process process;
+        try {
+            process = builder.start();
+        } catch (IOException failed) {
+            throw new IOException(describeStartFailure(server, failed), failed);
+        }
+        // ⚠️ stderr 必须**有人读**。管道有 64KB 的缓冲，写满之后服务器会永久卡在
+        // write 上，而它一卡，我们这一侧看到的只是"stdout 一直没有响应"
+        // —— 超时 30 秒之后报一句 MCP response timeout，原因完全看不出来。
+        // 顺手把它接进错误信息：命令没找到、缺依赖、配置写错都只在这里有痕迹。
+        StderrDrain drain = new StderrDrain(process.getErrorStream(), STDERR_CAPTURE_BYTES);
+        drain.start();
         try {
             BufferedInputStream in = new BufferedInputStream(process.getInputStream());
             BufferedOutputStream out = new BufferedOutputStream(process.getOutputStream());
-            write(out, METHOD_INITIALIZE, initializeParams(), true);
-            read(in);
+            long initId = write(out, METHOD_INITIALIZE, initializeParams(), true);
+            read(in, initId);
             // 通知没有 id，也不会有响应 —— 这是协议规定的，不是我们偷懒。
             write(out, METHOD_INITIALIZED, new JSONObject(), false);
-            write(out, method, params, true);
-            return read(in);
+            long requestId = write(out, method, params, true);
+            return read(in, requestId);
+        } catch (Exception failure) {
+            String stderr = drain.tail();
+            // 只有"closed stdout"这一句时，用户不知道是命令没找到、缺依赖还是配置写错了。
+            if (stderr.isEmpty()) throw failure;
+            throw new IOException(messageOf(failure) + "；服务器 stderr: " + stderr, failure);
         } finally {
             process.destroy();
             // 有些实现在收到 SIGTERM 之后仍然挂着。
             if (process.isAlive()) process.destroyForcibly();
+            drain.finish(EXIT_DRAIN_GRACE_MS);
+            closeQuietly(process.getInputStream());
+            closeQuietly(process.getOutputStream());
+            closeQuietly(process.getErrorStream());
         }
+    }
+
+    /**
+     * 子进程环境。
+     *
+     * <h3>为什么必须自己给 PATH / LD_LIBRARY_PATH</h3>
+     * 本进程是 Android **应用**进程，它的 PATH 里没有 Termux 的 bin 目录
+     * （Bash 工具早就设了这两个变量，见 {@code TermuxShellExecutor}，MCP 这一侧一直漏着）。
+     * 而 MCP 服务器几乎全是 Termux 里的东西 —— `node`、`npx`、`python3`。
+     * 文档里照抄 `"command": "npx"` 时，{@link ProcessBuilder} 会直接抛
+     * {@code Cannot run program "npx": error=2, No such file or directory}：
+     * 一句和真实原因隔着两层的话。
+     *
+     * <p>用户写在 {@code env} 里的键值对**最后**应用，所以它们仍然可以覆盖这里的默认值。
+     */
+    private void applyEnvironment(Map<String, String> environment, JSONObject pairs) {
+        String prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
+        File temporary = new File(prefix, "tmp");
+        if (!temporary.isDirectory()) temporary.mkdirs();
+        String inherited = environment.get("PATH");
+        environment.put("HOME", TermuxConstants.TERMUX_HOME_DIR_PATH);
+        environment.put("PREFIX", prefix);
+        environment.put("TMPDIR", temporary.getAbsolutePath());
+        // 前缀而不是替换：系统自带的解释器（/system/bin/sh 之类）也要找得到。
+        environment.put("PATH", inherited == null || inherited.isEmpty()
+            ? prefix + "/bin"
+            : prefix + "/bin:" + inherited);
+        environment.put("LD_LIBRARY_PATH", prefix + "/lib");
+        environment.put("LANG", "en_US.UTF-8");
+        applyPairs(environment, pairs);
     }
 
     /**
      * 走 Streamable HTTP。
      *
-     * <p>三步：initialize 拿到会话 id（可能在响应头里）→ 发已初始化通知 →
-     * 发真正的请求。会话 id 用私有键在请求之间传递，见类注释。
+     * <p>三步：initialize 拿到会话 id（可能在响应头里）与**协商版本** →
+     * 发已初始化通知 → 发真正的请求。会话 id 用私有键在请求之间传递，见类注释。
+     *
+     * <h3>协商版本为什么要带在后续请求上</h3>
+     * 2025-03-26 之后的规范要求：`initialize` 之后的所有请求都要带
+     * {@code MCP-Protocol-Version} 头，值是**服务器在 initialize 结果里答的那个版本**
+     * （服务器可以回一个它支持的、不同于我们请求的版本）。
+     * 不带这个头时，严格实现的服务器直接回 400 —— 表现出来是
+     * 「连得上、但工具清单和调用全部失败」，而错误只有一句 "MCP HTTP 400"。
      */
     private JSONObject overHttp(McpConfigStore.Server server, String method, JSONObject params)
             throws Exception {
         if (server.url == null || server.url.trim().isEmpty()) {
             throw new IOException("MCP HTTP URL is empty");
         }
-        JSONObject init = post(server, requestEnvelope(METHOD_INITIALIZE, initializeParams()), null);
+        JSONObject init = post(server, requestEnvelope(METHOD_INITIALIZE, initializeParams()), null, null);
         String sessionId = init == null ? null : init.optString(KEY_SESSION_ID, null);
-        post(server, requestEnvelope(METHOD_INITIALIZED, new JSONObject()), sessionId);
-        JSONObject result = post(server, requestEnvelope(method, params), sessionId);
+        String negotiated = init == null ? "" : init.optString(KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
+        post(server, requestEnvelope(METHOD_INITIALIZED, new JSONObject()), sessionId, negotiated);
+        JSONObject result = post(server, requestEnvelope(method, params), sessionId, negotiated);
         if (result != null) result.remove(KEY_SESSION_ID);
         return result;
     }
 
-    private JSONObject post(McpConfigStore.Server server, JSONObject body, String sessionId)
+    private JSONObject post(McpConfigStore.Server server, JSONObject body, String sessionId,
+                            String protocolVersion)
             throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(server.url).openConnection();
         connection.setConnectTimeout((int) TIMEOUT_MS);
@@ -242,6 +363,10 @@ public final class McpRuntime {
         connection.setRequestProperty("Accept", "application/json, text/event-stream");
         if (sessionId != null && !sessionId.isEmpty()) {
             connection.setRequestProperty(HEADER_SESSION_ID, sessionId);
+        }
+        // initialize 自己不带（协议就是这么写的）：它是协商版本的那一次。
+        if (protocolVersion != null && !protocolVersion.isEmpty()) {
+            connection.setRequestProperty(HEADER_PROTOCOL_VERSION, protocolVersion);
         }
         for (String name : namesOf(server.headers)) {
             connection.setRequestProperty(name, server.headers.optString(name, ""));
@@ -261,10 +386,49 @@ public final class McpRuntime {
         // 否则会阻塞在读一个永远不来的响应体上。
         if (METHOD_INITIALIZED.equals(body.optString("method"))) return null;
 
-        JSONObject result = parseEnvelope(readAll(connection.getInputStream()));
+        JSONObject result = parseEnvelope(readBody(connection));
         String returnedSession = connection.getHeaderField(HEADER_SESSION_ID);
         if (returnedSession != null && result != null) result.put(KEY_SESSION_ID, returnedSession);
         return result;
+    }
+
+    /**
+     * 读响应体。
+     *
+     * <h3>为什么 SSE 不能 {@code readAll}</h3>
+     * Streamable HTTP 允许用 {@code text/event-stream} 作答，而这种流**不保证关闭**：
+     * 服务器把事件推完就挂着连接（等后续通知）。早先这里一律读到 EOF，
+     * 于是每次工具调用都要干等到读超时（30 秒）才抛 "Read timed out" ——
+     * 服务器明明早就答完了。所以 SSE 只读到**第一个事件的结束空行**就收工。
+     */
+    private static String readBody(HttpURLConnection connection) throws IOException {
+        String contentType = connection.getContentType();
+        if (contentType != null && contentType.toLowerCase().contains(EVENT_STREAM_TYPE)) {
+            return readFirstEvent(connection.getInputStream());
+        }
+        return readAll(connection.getInputStream());
+    }
+
+    /** 读到第一个 SSE 事件的空行；返回拼好的 {@code data:} 内容，交给 {@link #parseEnvelope}。 */
+    private static String readFirstEvent(InputStream raw) throws IOException {
+        BufferedReader reader = new BufferedReader(
+            new InputStreamReader(raw, StandardCharsets.UTF_8), READ_BUFFER_BYTES);
+        StringBuilder event = new StringBuilder();
+        for (int line = 0; line < MAX_EVENT_LINES; line++) {
+            String text = reader.readLine();
+            if (text == null) break;
+            if (text.isEmpty()) {
+                // 空行 = 一个事件结束。还没读到 data 的是心跳行，继续等下一个事件。
+                if (event.length() > 0) break;
+                continue;
+            }
+            if (text.startsWith("data:")) {
+                if (event.length() > 0) event.append('\n');
+                event.append(text.substring(5).trim());
+            }
+            // event: / id: / retry: 对结果没有影响，忽略。
+        }
+        return event.toString();
     }
 
     // ------------------------------------------------------------ 协议报文
@@ -293,31 +457,56 @@ public final class McpRuntime {
     }
 
     /** stdio 侧写一条消息。通知（{@code withId=false}）不带 id，见协议。 */
-    private void write(BufferedOutputStream out, String method, JSONObject params, boolean withId)
+    private long write(BufferedOutputStream out, String method, JSONObject params, boolean withId)
             throws IOException {
         try {
             JSONObject envelope = new JSONObject()
                 .put("jsonrpc", "2.0").put("method", method).put("params", params);
-            if (withId) envelope.put("id", nextId.getAndIncrement());
+            long id = withId ? nextId.getAndIncrement() : -1L;
+            if (withId) envelope.put("id", id);
             byte[] payload = envelope.toString().getBytes(StandardCharsets.UTF_8);
             out.write(("Content-Length: " + payload.length + "\r\n\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
             out.write(payload);
             out.flush();
+            return id;
         } catch (Exception failure) {
             throw new IOException(failure);
         }
     }
 
     /**
-     * 读一条 {@code Content-Length} 分帧的消息。
+     * 读一条 {@code Content-Length} 分帧的响应。
      *
      * <p>返回值统一成「result 对象」：协议信封是
      * {@code {"id":…,"result":{…}}}，而调用方要的是里面那个 {@code result}。
      * 遇到 {@code error} 键则抛错 —— 协议层错误不能当成空结果吞掉，
      * 那会让「服务器拒绝了这次调用」变成「服务器返回了空」。
+     *
+     * <h3>为什么要按 id 挑消息</h3>
+     * 服务器可以在任何时候发**通知**（JSON-RPC 里没有 id 的那种：日志、进度、
+     * {@code notifications/tools/list_changed}）。早先这里读到一条就当成响应，
+     * 于是一条通知会把整次握手打乱：`initialize` 拿到的是通知的内容，
+     * 会话 id 拿不到，工具清单变成空的 —— 表现出来是「配置没错但一个工具都没有」。
+     * 现在按请求 id 挑，不是自己那条就丢掉继续读（有次数上限，见 [MAX_SKIPPED_MESSAGES]）。
+     *
+     * @param expectedId 本次请求的 id；{@code < 0} 表示不挑（协议里通知没有响应）
      */
-    private JSONObject read(BufferedInputStream in) throws Exception {
+    private JSONObject read(BufferedInputStream in, long expectedId) throws Exception {
+        for (int skipped = 0; skipped < MAX_SKIPPED_MESSAGES; skipped++) {
+            JSONObject envelope = readMessage(in);
+            if (expectedId < 0L) return unwrap(envelope);
+            Object id = envelope.opt("id");
+            if (id != null && envelope.optLong("id", Long.MIN_VALUE) == expectedId) {
+                return unwrap(envelope);
+            }
+            // 不是我们要的那一条：多半是通知，或上一条请求迟到的响应。
+        }
+        throw new IOException("MCP response not received for request " + expectedId);
+    }
+
+    /** 读一条消息的**信封**（不分帧、不拆 result），见 {@link #read}。 */
+    private JSONObject readMessage(BufferedInputStream in) throws Exception {
         long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         int length = -1;
         String line;
@@ -332,9 +521,7 @@ public final class McpRuntime {
         if (length < 0 || length > MAX_MESSAGE_BYTES) {
             throw new IOException("invalid MCP content length");
         }
-        JSONObject envelope = new JSONObject(
-            new String(readFully(in, length, deadline), StandardCharsets.UTF_8));
-        return unwrap(envelope);
+        return new JSONObject(new String(readFully(in, length, deadline), StandardCharsets.UTF_8));
     }
 
     /**
@@ -379,16 +566,112 @@ public final class McpRuntime {
 
     // ---------------------------------------------------------------- 小工具
 
+    /**
+     * 拼命令行，并把「短名字」解析成绝对路径。
+     *
+     * <p>查 PATH 这一步 {@link ProcessBuilder} 自己也会做（PATH 已由
+     * {@link #applyEnvironment} 设好），这里先解析一遍是为了**能给出原因**：
+     * 解析不到时 {@link #describeStartFailure} 就能直接说清
+     * 「$PREFIX/bin 里没有这个命令」，而不是让 Java 抛一句 error=2。
+     */
     private static List<String> commandLine(McpConfigStore.Server server) {
         List<String> command = new ArrayList<>();
-        command.add(server.command);
+        command.add(resolveCommand(server.command));
         command.addAll(server.args);
         return command;
+    }
+
+    private static String resolveCommand(String raw) {
+        String command = raw == null ? "" : raw.trim();
+        // 带斜杠的一律按路径处理：用户写绝对路径或相对路径都应该原样交给系统。
+        if (command.isEmpty() || command.indexOf('/') >= 0) return command;
+        File candidate = new File(TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH, command);
+        return candidate.isFile() && candidate.canExecute() ? candidate.getAbsolutePath() : command;
+    }
+
+    /** 启动失败时把「为什么」补全：error=2 本身离原因太远，见 {@link #applyEnvironment}。 */
+    private static String describeStartFailure(McpConfigStore.Server server, IOException failure) {
+        String command = server.command == null ? "" : server.command.trim();
+        StringBuilder message = new StringBuilder("MCP stdio 无法启动：").append(messageOf(failure));
+        if (!command.isEmpty() && command.indexOf('/') < 0
+            && !new File(TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH, command).isFile()) {
+            message.append("；在 ").append(TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH)
+                .append(" 里找不到 ").append(command)
+                .append("，请先安装它，或在配置里直接写它的绝对路径");
+        }
+        return message.toString();
+    }
+
+    /**
+     * 排空子进程的 stderr，并保留最后一段。
+     *
+     * <p>它是**必须存在**的，不是"顺手收集日志"：管道缓冲只有 64KB，没人读的话
+     * 服务器写满就永久阻塞（见 {@link #overStdio}）。所以即使超出保留上限，
+     * 也继续读、只是把多出来的部分丢掉。
+     *
+     * <p>保留的是**尾部**：真正的错误信息（缺依赖、端口占用、鉴权失败）
+     * 总在最后几行，前面全是启动横幅。
+     */
+    private static final class StderrDrain extends Thread {
+
+        private final InputStream stream;
+        private final int capacity;
+        private final StringBuilder captured = new StringBuilder();
+
+        StderrDrain(InputStream stream, int capacity) {
+            super("mcp-stderr");
+            setDaemon(true);
+            this.stream = stream;
+            this.capacity = capacity;
+        }
+
+        @Override public void run() {
+            byte[] buffer = new byte[4096];
+            try {
+                int read;
+                while ((read = stream.read(buffer)) != -1) {
+                    append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+                }
+            } catch (Throwable closed) {
+                // 进程已经退出/流被关掉：这是正常的收尾路径，不是错误。
+            }
+        }
+
+        private synchronized void append(String text) {
+            captured.append(text);
+            if (captured.length() <= capacity) return;
+            // 只留尾部（见类注释），多出来的直接丢。
+            captured.delete(0, captured.length() - capacity);
+        }
+
+        synchronized String tail() {
+            String text = captured.toString().trim();
+            return text.length() <= STDERR_REPORT_CHARS
+                ? text
+                : "…" + text.substring(text.length() - STDERR_REPORT_CHARS);
+        }
+
+        void finish(long millis) {
+            try {
+                join(millis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /** 把 JSON 对象的键值对写进环境或请求头；空键跳过。 */
     private static void applyPairs(Map<String, String> target, JSONObject pairs) {
         for (String key : namesOf(pairs)) target.put(key, pairs.optString(key, ""));
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (Throwable ignored) {
+            // 收尾关不掉就算了，它不会污染错误信息。
+        }
     }
 
     private static List<String> namesOf(JSONObject object) {
@@ -403,17 +686,50 @@ public final class McpRuntime {
         return names;
     }
 
-    /** 把 MCP 的内容块数组压成一段文本，块之间用换行分隔。 */
+    /**
+     * 把 MCP 的内容块数组压成一段文本，块之间用换行分隔。
+     *
+     * <h3>为什么非文本块不能直接跳过</h3>
+     * 早先这里只取 {@code text} 字段，其余静默丢弃 —— 于是"截图类"服务器
+     * （返回 image 块）在模型眼里是**什么都没返回**，而模型接着就会把
+     * "工具没有输出"当成事实继续往下推。丢内容比丢格式严重得多，所以这里给
+     * 非文本块留一个可读的占位（图片、资源、以及未知类型都走最后那一支）。
+     */
     private static String flattenContent(JSONArray content) {
         if (content == null) return "";
         StringBuilder out = new StringBuilder();
         for (JSONObject item : JsonItems.of(content)) {
             String text = item.optString("text", "");
+            if (text.isEmpty()) text = describeNonText(item);
             if (text.isEmpty()) continue;
             if (out.length() > 0) out.append('\n');
             out.append(text);
         }
         return out.toString();
+    }
+
+    /** 非文本内容块的占位说明；认不出来时退回它自己的 JSON。 */
+    private static String describeNonText(JSONObject item) {
+        String type = item.optString("type", "");
+        if ("image".equals(type)) {
+            return "[图片内容：" + item.optString("mimeType", "未知类型") + "，本工具只能转述文本]";
+        }
+        if ("audio".equals(type)) {
+            return "[音频内容：" + item.optString("mimeType", "未知类型") + "]";
+        }
+        if ("resource".equals(type)) {
+            JSONObject resource = item.optJSONObject("resource");
+            if (resource != null) {
+                String inner = resource.optString("text", "");
+                return inner.isEmpty() ? "[资源：" + resource.optString("uri", "") + "]" : inner;
+            }
+            return "[资源内容]";
+        }
+        if (type.isEmpty()) return "";
+        String raw = item.toString();
+        return raw.length() <= NON_TEXT_REPORT_CHARS
+            ? raw
+            : raw.substring(0, NON_TEXT_REPORT_CHARS) + "…";
     }
 
     private static String readAll(InputStream in) throws IOException {
