@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.zhizhu.zhicode.compose.theme.ZhiColors
+import com.zhizhu.zhicode.compose.ui.PageFeedbackSlot
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
 import com.zhizhu.zhicode.compose.ui.ZhiMotion
 import top.yukonga.miuix.kmp.basic.Icon
@@ -248,6 +249,11 @@ internal fun SettingsSubPage(
      */
     overlay: (@Composable () -> Unit)? = null,
     /**
+     * 顶栏动作是否可点。动作在飞（保存 / 导入）时置 false，避免重复提交 ——
+     * 判定来自 `LocalActionBusy`，页面不该自己维护第二份"正在保存"。
+     */
+    actionEnabled: Boolean = true,
+    /**
      * 顶栏与滚动区之间的**固定**内容（目前只有 MCP 表单的 TAB 栏用）。
      *
      * ⚠️ 它和 [content] 的区别是「会不会被滚走」：header 不随内容滚动，
@@ -299,7 +305,11 @@ internal fun SettingsSubPage(
                 },
                 actions = {
                     if (action != null && action.second != null) {
-                        TextButton(text = action.first, onClick = action.second!!)
+                        TextButton(
+                            text = action.first,
+                            onClick = action.second!!,
+                            enabled = actionEnabled,
+                        )
                     }
                 },
             )
@@ -364,6 +374,10 @@ internal fun SettingsSubPage(
                 // 浮层挂在 Scaffold 的 composition 里、LazyColumn 之外 —— 见 overlay 参数的说明。
                 overlay?.invoke()
             }
+            // 二级页的操作反馈（「保存失败」「已删除技能」…）。这六个页面都没有
+            // WorkspaceUiState，所以数据源由 AppScaffold 通过 CompositionLocal 提供；
+            // 没有提供时这一行什么也不画。
+            PageFeedbackSlot(modifier = Modifier.fillMaxWidth())
         }
     }
 }

@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
@@ -28,6 +28,7 @@ import com.zhizhu.zhicode.compose.ui.settings.SettingsLoadingHint
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageKey
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageStack
 import com.zhizhu.zhicode.compose.ui.settings.SettingsSubPage
+import com.zhizhu.zhicode.compose.ui.rememberActionBusy
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import top.yukonga.miuix.kmp.basic.DropdownDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -51,7 +52,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 界面上要让人一眼看出"哪张正在生效"，所以启用中的那条打勾并高亮。
  */
 @Composable
-fun RoleCardsOverlay(
+fun RoleCardsPage(
     state: RoleCardsState?,
     onDismiss: () -> Unit,
     onNew: () -> Unit,
@@ -67,13 +68,21 @@ fun RoleCardsOverlay(
     val editor = state.editor
     // 退出动画期间离场页仍在绘制，那时 editor 已经是 null —— 见 rememberLastNonNull 的说明。
     val shownEditor = rememberLastNonNull(editor)
+
+    // 同上：有未保存改动时返回先问一次（判定在 RoleCardEditor.dirty）。
+    var confirmDiscard by remember { mutableStateOf(false) }
+    val dirty = editor?.dirty == true
+    val requestExit: () -> Unit = {
+        if (dirty) confirmDiscard = true else onCancelEditor()
+    }
+
     SettingsPageStack(
         // 路径含最底下那一页：栈要靠整条路径算层级与方向。
         path = listOf(
             SettingsPageKey("roleCards.list", 0),
             if (editor != null) SettingsPageKey("roleCards.editor", 1) else null,
         ).filterNotNull(),
-        onBack = if (editor == null) onDismiss else onCancelEditor,
+        onBack = if (editor == null) onDismiss else requestExit,
     ) { key ->
         // ⚠️ 分支必须看**正在渲染的那一页**（key），不能看当前状态。
         val open = if (key.id == "roleCards.editor") shownEditor else null
@@ -94,8 +103,9 @@ fun RoleCardsOverlay(
         } else {
             SettingsSubPage(
                 title = if (open.isEditing) "编辑角色卡" else "新建角色卡",
-                onBack = onCancelEditor,
+                onBack = requestExit,
                 action = "保存" to (if (open.saveable) onSave else null),
+                actionEnabled = !rememberActionBusy("roleCards.save"),
             ) {
                 RoleCardEditorForm(
                     editor = open,
@@ -104,6 +114,15 @@ fun RoleCardsOverlay(
             }
         }
     }
+
+    UnsavedChangesDialog(
+        visible = confirmDiscard,
+        onKeepEditing = { confirmDiscard = false },
+        onDiscard = {
+            confirmDiscard = false
+            onCancelEditor()
+        },
+    )
 }
 
 @Composable

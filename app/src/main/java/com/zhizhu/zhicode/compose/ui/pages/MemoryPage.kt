@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -6,6 +6,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -18,6 +22,7 @@ import com.zhizhu.zhicode.compose.ui.settings.SettingsLoadingHint
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageKey
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageStack
 import com.zhizhu.zhicode.compose.ui.settings.SettingsSubPage
+import com.zhizhu.zhicode.compose.ui.rememberActionBusy
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
@@ -34,7 +39,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * "会自动作为记忆生效"——后者会让用户以为写完就生效了，然后困惑于模型为什么不遵守。
  */
 @Composable
-fun MemoryOverlay(
+fun MemoryPage(
     state: MemoryState?,
     onDismiss: () -> Unit,
     onEdit: (MemoryFile) -> Unit,
@@ -47,13 +52,22 @@ fun MemoryOverlay(
     val editing = state.editing
     // 退出动画期间离场页仍在绘制，那时 editing 已经是 null —— 见 rememberLastNonNull 的说明。
     val shownEditing = rememberLastNonNull(editing)
+
+    // 有未保存的改动时，返回先问一次（顶栏返回、边缘滑动、系统返回都走 onBack）。
+    // 判定来自 MemoryEditor.dirty —— 界面不自己记快照，否则保存成功后仍会以为还脏。
+    var confirmDiscard by remember { mutableStateOf(false) }
+    val dirty = editing?.dirty == true
+    val requestExit: () -> Unit = {
+        if (dirty) confirmDiscard = true else onCancelEdit()
+    }
+
     SettingsPageStack(
         // 路径含最底下那一页：栈要靠整条路径算层级与方向。
         path = listOf(
             SettingsPageKey("memory.list", 0),
             if (editing != null) SettingsPageKey("memory.editor", 1) else null,
         ).filterNotNull(),
-        onBack = if (editing == null) onDismiss else onCancelEdit,
+        onBack = if (editing == null) onDismiss else requestExit,
     ) { key ->
         // ⚠️ 分支必须看**正在渲染的那一页**（key），不能看当前状态。
         val open = if (key.id == "memory.editor") shownEditing else null
@@ -71,8 +85,9 @@ fun MemoryOverlay(
         } else {
             SettingsSubPage(
                 title = open.title,
-                onBack = onCancelEdit,
+                onBack = requestExit,
                 action = "保存" to onSave,
+                actionEnabled = !rememberActionBusy("memory.save"),
             ) {
                 MemoryEditorBody(
                     editing = open,
@@ -81,6 +96,15 @@ fun MemoryOverlay(
             }
         }
     }
+
+    UnsavedChangesDialog(
+        visible = confirmDiscard,
+        onKeepEditing = { confirmDiscard = false },
+        onDiscard = {
+            confirmDiscard = false
+            onCancelEdit()
+        },
+    )
 }
 
 @Composable

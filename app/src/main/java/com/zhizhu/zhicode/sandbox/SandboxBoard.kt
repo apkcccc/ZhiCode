@@ -21,10 +21,10 @@ import com.zhizhu.zhicode.compose.theme.LocalZhiDark
 import com.zhizhu.zhicode.compose.theme.ZhiColors
 import com.zhizhu.zhicode.compose.theme.ZhiThemeMode
 import com.zhizhu.zhicode.compose.theme.zhiTextStyles
-import com.zhizhu.zhicode.compose.ui.sandbox.SandboxBoardUiState
-import com.zhizhu.zhicode.compose.ui.sandbox.SandboxDialog
-import com.zhizhu.zhicode.compose.ui.sandbox.SandboxStatusTone
-import com.zhizhu.zhicode.compose.ui.sandbox.ZhiSandboxScreen
+import com.zhizhu.zhicode.compose.ui.pages.SandboxBoardUiState
+import com.zhizhu.zhicode.compose.ui.pages.SandboxDialog
+import com.zhizhu.zhicode.compose.ui.pages.SandboxStatusTone
+import com.zhizhu.zhicode.compose.ui.pages.SandboxPage
 import org.json.JSONArray
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -54,7 +54,7 @@ import java.util.concurrent.Executors
  * `@android:style/Theme.Material.NoActionBar.Fullscreen` —— 框架的 Material v1。
  * 结果就是这一屏**根本没进 Miuix 主题树**：开关是 Material v1 的青色 accent、弹窗是平台样式，
  * 与其余界面完全不是一路。现在绘制交给
- * [com.zhizhu.zhicode.compose.ui.sandbox.ZhiSandboxScreen]，走与 `ZhiCodeApp` 相同的主题栈。
+ * [com.zhizhu.zhicode.compose.ui.pages.SandboxPage]，走与 `ZhiCodeApp` 相同的主题栈。
  *
  * 本类因此只剩三件事：**持有状态**、**调后端**、**把动作接到后端上**。
  *
@@ -201,7 +201,7 @@ class SandboxBoard : ComponentActivity() {
                     colors = colors.copy(background = ZhiColors.backdrop()),
                     textStyles = zhiTextStyles(),
                 ) {
-                    ZhiSandboxScreen(
+                    SandboxPage(
                         state = ui.value,
                         onBack = { finish() },
                         onRefresh = { reload() },
@@ -367,7 +367,7 @@ class SandboxBoard : ComponentActivity() {
      *
      * 回读在 worker 之外做（磁盘读，毫秒级），`setRootSwitch(..., busy = false)`,
      * ——没有请求在飞，开关本身可点；后端不通时的不可能点由界面侧从
-     * `errorDetail` 推出来（见 `ZhiSandboxScreen.settingsEnabled`），不借在飞标志当禁用位。
+     * `errorDetail` 推出来（见 `SandboxPage.settingsEnabled`），不借在飞标志当禁用位。
      */
     private fun showBackendError(error: String) {
         if (destroyed) return

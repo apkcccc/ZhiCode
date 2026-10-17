@@ -1,7 +1,13 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages.overlays
 
 import com.zhizhu.zhicode.compose.theme.ZhiRadius
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogShell
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogWideInsideMargin
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogWideOutsideMargin
+import com.zhizhu.zhicode.compose.ui.dialogs.PrimaryButton
+import com.zhizhu.zhicode.compose.ui.dialogs.SecondaryButton
+import com.zhizhu.zhicode.compose.ui.dialogs.ZhiDialogWidth
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row

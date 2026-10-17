@@ -10,7 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.zhizhu.zhicode.compose.theme.ZhiAppTheme
 import com.zhizhu.zhicode.compose.theme.ZhiThemeMode
-import com.zhizhu.zhicode.compose.ui.panes.FileEditorScreen
+import com.zhizhu.zhicode.compose.ui.pages.EditorPage
 
 /**
  * 文本编辑器的宿主 Activity。
@@ -78,7 +78,7 @@ class EditorActivity : ComponentActivity() {
         setContent {
             // 与主界面同一个主题栈（ZhiThemeMode 是深浅的唯一判定处）。
             ZhiAppTheme(mode = themeMode) {
-                FileEditorScreen(viewModel = viewModel, onExit = { finishWithResult() })
+                EditorPage(viewModel = viewModel, onExit = { finishWithResult() })
             }
         }
     }

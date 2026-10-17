@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.panes
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -63,8 +63,8 @@ import com.zhizhu.zhicode.compose.model.FileRoot
 import com.zhizhu.zhicode.compose.model.FileListOptions
 import com.zhizhu.zhicode.compose.model.FileSortKey
 import com.zhizhu.zhicode.compose.model.fileRangeSelection
-import com.zhizhu.zhicode.compose.ui.ZhiTextField
 import com.zhizhu.zhicode.compose.theme.ZhiColors
+import com.zhizhu.zhicode.compose.ui.ZhiTextField
 import com.zhizhu.zhicode.compose.ui.ZhiIconButton
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
 import com.zhizhu.zhicode.compose.ui.ZhiMaterialIcons
@@ -73,6 +73,13 @@ import com.zhizhu.zhicode.compose.ui.ZhiNoticeTone
 import com.zhizhu.zhicode.compose.ui.Glass
 import com.zhizhu.zhicode.compose.ui.dialogs.DialogShell
 import com.zhizhu.zhicode.compose.ui.dialogs.PrimaryButton
+import com.zhizhu.zhicode.compose.ui.panes.DeleteConfirmDialog
+import com.zhizhu.zhicode.compose.ui.panes.FileListRow
+import com.zhizhu.zhicode.compose.ui.panes.FilePathBar
+import com.zhizhu.zhicode.compose.ui.panes.FileRootSwitcher
+import com.zhizhu.zhicode.compose.ui.panes.FileRowSidePadding
+import com.zhizhu.zhicode.compose.ui.panes.NewEntryDialog
+import com.zhizhu.zhicode.compose.ui.panes.RenameEntryDialog
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -90,7 +97,7 @@ import top.yukonga.miuix.kmp.utils.PagerNavigationSpringSpec
 import top.yukonga.miuix.kmp.utils.springAnimateToPage
 
 @Composable
-fun FilesPane(
+fun FilesPage(
     filePath: String,
     entries: List<FileEntry>,
     onOpen: (FileEntry) -> Unit,

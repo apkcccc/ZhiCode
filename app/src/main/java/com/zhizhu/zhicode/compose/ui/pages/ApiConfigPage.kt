@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
@@ -92,7 +92,7 @@ private val ZCODE_HEADERS_HINT = """
  *   这个语义必须在界面上写清楚，否则用户会以为"留空等于清空密钥"而不敢动表单。
  */
 @Composable
-fun ApiConfigOverlay(
+fun ApiConfigPage(
     config: ApiConfigState?,
     onDismiss: () -> Unit,
     onNew: () -> Unit,

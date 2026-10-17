@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
@@ -60,7 +60,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 新增一家服务只需要在枚举里加一项，不用碰这个文件。这也避免了「加一家就多一段 if」。
  */
 @Composable
-fun SearchServicesOverlay(
+fun SearchServicesPage(
     state: SearchServicesState?,
     onDismiss: () -> Unit,
     onNew: () -> Unit,

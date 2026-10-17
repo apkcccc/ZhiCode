@@ -1,19 +1,17 @@
 package com.zhizhu.zhicode.compose.ui
 
-import com.zhizhu.zhicode.compose.ui.debug.UiDebugPage
-import com.zhizhu.zhicode.compose.ui.debug.ZhiDebugHud
+import com.zhizhu.zhicode.compose.ui.pages.UiDebugPage
+import com.zhizhu.zhicode.compose.ui.pages.WorkspacePage
 import com.zhizhu.zhicode.compose.ui.debug.ZhiFrameTrace
-import com.zhizhu.zhicode.compose.ui.dialogs.ApiConfigOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.McpConfigOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.SearchServicesOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.MemoryOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.RoleCardsOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.SkillsOverlay
-import com.zhizhu.zhicode.compose.ui.settings.SettingsDialog
+import com.zhizhu.zhicode.compose.ui.pages.ApiConfigPage
+import com.zhizhu.zhicode.compose.ui.pages.McpConfigPage
+import com.zhizhu.zhicode.compose.ui.pages.SearchServicesPage
+import com.zhizhu.zhicode.compose.ui.pages.MemoryPage
+import com.zhizhu.zhicode.compose.ui.pages.RoleCardsPage
+import com.zhizhu.zhicode.compose.ui.pages.SkillsPage
+import com.zhizhu.zhicode.compose.ui.pages.SettingsPage
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +19,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.app.Application
 import android.app.Activity
@@ -32,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zhizhu.zhicode.compose.editor.EditorActivity
 import com.zhizhu.zhicode.compose.theme.ZhiAppTheme
@@ -45,11 +43,9 @@ import com.zhizhu.zhicode.compose.model.RoleCardsState
 import com.zhizhu.zhicode.compose.model.MemoryState
 import com.zhizhu.zhicode.compose.model.SettingsDraft
 import com.zhizhu.zhicode.compose.theme.ZhiThemeMode
-import com.zhizhu.zhicode.compose.model.WorkspaceTab
 import com.zhizhu.zhicode.compose.model.WorkspaceUiState
 import com.zhizhu.zhicode.compose.state.WorkspaceViewModel
 import com.zhizhu.zhicode.compose.state.WorkspaceViewModelFactory
-import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
 import top.yukonga.miuix.kmp.nav.core.NavController
 import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
@@ -291,6 +287,21 @@ private fun ZhiCodeScreen(
         else -> NavSwipeDirection.LeftToRight
     }
 
+    // 整页（设置 / 二级页 / UI 调试）底部的反馈条数据源。
+    // 那些页各自持有 `SettingsDraft` / `SkillsState` …，都拿不到 WorkspaceUiState，
+    // 所以在这里提供一次，页面用 PageFeedbackSlot() 消费（见 ui/PageFeedback.kt）。
+    val pageFeedback = remember(state.message, state.messageIsError, viewModel) {
+        PageFeedbackData(
+            message = state.message,
+            isError = state.messageIsError,
+            onDismiss = viewModel::clearMessage,
+        )
+    }
+
+    CompositionLocalProvider(
+        LocalPageFeedback provides pageFeedback,
+        LocalActionBusy provides state.inFlight,
+    ) {
     NavDisplay(
         backStack = nav.backStack,
         modifier = Modifier.fillMaxSize(),
@@ -317,149 +328,28 @@ private fun ZhiCodeScreen(
         },
     ) {
         entry<AppKey.Workspace> {
-        Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            floatingToolbar = {
-                com.zhizhu.zhicode.compose.ui.panes.FileSelectionToolbar(
-                    visible = !wide && (state.fileSelectionMode || state.fileSelection.isNotEmpty()),
-                    entries = state.fileEntries,
-                    selection = state.fileSelection,
-                    glass = glassMain,
-                    onAttach = viewModel::attachSelectedEntries,
-                    onRename = viewModel::renameSelectedEntry,
-                    onDelete = viewModel::deleteSelectedEntries,
-                    onCopy = viewModel::copySelectedEntries,
-                    onMove = viewModel::moveSelectedEntries,
-                    clipboardCount = state.fileClipboard.size,
-                    clipboardMove = state.fileClipboardMove,
-                    onPaste = viewModel::pasteFilesIntoCurrentDirectory,
-                    onSelectAll = viewModel::toggleSelectAllFiles,
-                    onDismiss = viewModel::clearFileSelection,
-                )
-            },
-            topBar = {
-                if (wide) {
-                    // 宽屏：侧栏常驻，顶栏只覆盖右侧内容区 —— 由 WorkspaceLayouts
-                    // 里的 WideWorkspace 自己排侧栏 + 分隔线 + 顶栏，这里不重复挂。
-                } else {
-                    ZhiTopBar(
-                        state = TopBarState.from(state),
-                        wide = false,
-                        glass = glassMain,
-                        onOpenSidebar = viewModel::openSidebar,
-                        onContextClick = {
-                            viewModel.onComposerChange("/usage")
-                            viewModel.send()
-                        },
-                        onSettings = {
-                            ZhiFrameTrace.begin("settings:open")
-                            viewModel.openSettings()
-                        },
-                        tabs = WorkspaceTab.entries,
-                        selectedTab = state.tab,
-                        onSelectTab = { tab ->
-                            ZhiFrameTrace.begin("tab:${tab.name}")
-                            // ViewModel 是唯一业务真源；Pager 由 state.tab 反向同步。
-                            viewModel.selectTab(tab)
-                        },
-                    )
-                }
-            },
-        ) { padding ->
-            // 顶栏 blur 需要内容从它**底下滚过**才有东西可采样：
-            // 去掉 padding.top，让内容 Box 从 y=0 铺满，各面板自己在头部留白。
-            //
-            // ⚠️ 丢掉 top 是**有代价的**，改动这里之前必须知道：
-            // 任何从 y=0 开始画、又不自己顶开的面板，头部都会被顶栏盖住。
-            // 所以每个面板必须二选一 ——
-            //   · 对话面板：用 ChatList 的 topInset（**滚动内边距**，它要能滚过顶栏）；
-            //   · 其余面板：用 `TopBarInsetCompact` 的 **padding** 顶开
-            //     （见 WorkspaceLayouts 里 PaneHost 那个分支）。
-            // **新加面板时最容易漏的就是这一步**（文件面板就这么被盖过一次，
-            // 当时这里有一句指向并不存在的常量的注释，照它做就漏了）。
-            Box(
-                modifier = Modifier.fillMaxSize().padding(
-                    bottom = padding.calculateBottomPadding(),
-                ),
-            ) {
-                // 整块工作区先录进 glassMain 的背景（抽屉/弹窗的模糊来源）
-                Box(modifier = Modifier.fillMaxSize().then(glassMain.capture(Modifier))) {
-                    if (wide) {
-                        // 宽屏的顶栏在右侧内容区内部（与常驻侧栏并列），见 WideWorkspace
-                        WideWorkspace(
-                            state = state,
-                            viewModel = viewModel,
-                            isDark = isDark,
-                            glass = glass,
-                            glassMain = glassMain,
-                        )
-                    } else {
-                        CompactWorkspace(
-                            state = state,
-                            viewModel = viewModel,
-                            isDark = isDark,
-                            glass = glass,
-                            )
-                    }
-                }
-
-
-                // ---- Overlay 系列 ----
-                // 弹窗挂载与模态模糊背景在 OverlayHost.kt。
-                // 必须仍处于 Scaffold 内容里才能找到 popupHost。
-                ZhiOverlayHost(state = state, viewModel = viewModel, glassMain = glassMain)
-
-                // ---- 全局调试浮层（debug 构建的 UI 调试页里打开）----
-                // 画在最后 = 压在所有东西之上，但只在自己那块矩形里响应手势，
-                // 其余事件原样透传给下面的工作区。
-                //
-                // `BuildConfig.DEBUG` 是硬门控：唯一能把它打开的地方是 debug 独有
-                // 的「UI 调试」页，这里再挡一道 —— 万一将来有人把开关挪到别处，
-                // 也不会有发布包里冒出调试浮层这种事。
-                if (com.zhizhu.zhicode.compose.BuildConfig.DEBUG && state.debugOverlayEnabled) {
-                    ZhiDebugHud(
-                        state = state,
-                        viewModel = viewModel,
-                        glass = glassMain,
-                        // 让出顶栏（含 Tab 行）的高度，否则药丸会被模糊顶栏压住。
-                        topInset = TopBarInsetCompact,
-                    )
-                }
-            }
-        }
-
-        // ---- 侧边栏抽屉（窄屏，画在 Scaffold 之上）----
-        if (!wide) {
-            ZhiSideDrawer(
-                open = state.sidebarOpen,
-                onClose = viewModel::closeSidebar,
-                // 宽度上限 300dp：抽屉是"导航"，不是工作区 —— 铺到 320dp/82% 时
-                // 它一打开就把后面的对话流整个盖住，用户反馈「侧栏有点太宽泛了」。
-                // 比例 0.76 兜住小屏：360dp 的机器上是 274dp，不至于挤掉 24dp 图标。
-                width = (configuration.screenWidthDp * 0.76f).dp.coerceAtMost(300.dp),
-                glass = glassMain,
-            ) {
-                ZhiSidebarHost(
-                    state = state,
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxHeight(),
-                )
-            }
-        }
-        }
+            WorkspacePage(
+                state = state,
+                viewModel = viewModel,
+                isDark = isDark,
+                wide = wide,
+                glass = glass,
+                glassMain = glassMain,
+            )
         }
         // 设置页与它的二级页开启边缘滑动返回（Miuix 的 opt-in）；root 工作区不开 ——
         // 它下面没有可回退的页，而内部已经有侧栏抽屉与面板切换在横向上处理手势。
         entry<SettingsKey.Hub>(swipeDismiss = swipeBack) {
-            SettingsDialog(
+            SettingsPage(
                 draft = settingsUi,
                 onChange = viewModel::applySettingsDraft,
                 onDismiss = viewModel::closeSettings,
                 onNavigate = viewModel::navigateFromSettings,
+                extensions = state.extensions,
             )
         }
         entry<SettingsKey.Api>(swipeDismiss = swipeBack) {
-            ApiConfigOverlay(
+            ApiConfigPage(
                 config = apiUi,
                 onDismiss = viewModel::closeApiConfig,
                 onNew = viewModel::newApiProfile,
@@ -472,7 +362,7 @@ private fun ZhiCodeScreen(
             )
         }
         entry<SettingsKey.Search>(swipeDismiss = swipeBack) {
-            SearchServicesOverlay(
+            SearchServicesPage(
                 state = searchServicesUi,
                 onDismiss = viewModel::closeSearchServices,
                 onNew = viewModel::newSearchService,
@@ -485,7 +375,7 @@ private fun ZhiCodeScreen(
             )
         }
         entry<SettingsKey.Mcp>(swipeDismiss = swipeBack) {
-            McpConfigOverlay(
+            McpConfigPage(
                 config = mcpUi,
                 onDismiss = viewModel::closeMcpConfig,
                 onNew = viewModel::newMcpServer,
@@ -501,10 +391,12 @@ private fun ZhiCodeScreen(
                 onImportTextChange = viewModel::updateMcpImportText,
                 onImportConfirm = viewModel::importMcpJson,
                 onImportCancel = viewModel::cancelMcpImport,
+                onTestAll = viewModel::testAllMcpServers,
+                onQueryChange = viewModel::setMcpQuery,
             )
         }
         entry<SettingsKey.Skills>(swipeDismiss = swipeBack) {
-            SkillsOverlay(
+            SkillsPage(
                 state = skillsUi,
                 onDismiss = viewModel::closeSkills,
                 onQueryChange = viewModel::setSkillQuery,
@@ -533,7 +425,7 @@ private fun ZhiCodeScreen(
             )
         }
         entry<SettingsKey.RoleCards>(swipeDismiss = swipeBack) {
-            RoleCardsOverlay(
+            RoleCardsPage(
                 state = roleCardsUi,
                 onDismiss = viewModel::closeRoleCards,
                 onNew = viewModel::newRoleCard,
@@ -547,7 +439,7 @@ private fun ZhiCodeScreen(
             )
         }
         entry<SettingsKey.Memory>(swipeDismiss = swipeBack) {
-            MemoryOverlay(
+            MemoryPage(
                 state = memoryUi,
                 onDismiss = viewModel::closeMemory,
                 onEdit = viewModel::editMemory,
@@ -569,6 +461,7 @@ private fun ZhiCodeScreen(
                 onImportSession = { importLauncher.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
             )
         }
+    }
     }
 }
 

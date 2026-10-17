@@ -858,12 +858,33 @@ data class WorkspaceUiState(
      * 效果不会重放。
      */
     val scrollToBottomToken: Long = 0L,
+    /**
+     * 正在跑的**页面动作**（保存 / 创建 / 删除 / 粘贴 / 测试连接…）的键集合。
+     *
+     * <p>由 ViewModel 的 `runBusy` 统一登记（见 [ActionBusy]）：同一个键在飞时，
+     * 第二次触发会被**静默丢弃**，而不是把同一件事做两遍 —— 双击「粘贴」复制两遍、
+     * 双击「删除」弹出"删除失败"，都是这条规则缺失时的表现。
+     *
+     * <p>界面按 `state.isBusy("skills.save")` 禁用按钮并显示进度。空集合表示什么
+     * 都不在跑，这也是绝大多数时刻的状态。
+     */
+    val inFlight: Set<String> = emptySet(),
+    /**
+     * 「设置 → 扩展」组显示的数量摘要（MCP / 技能 / 角色卡）。
+     *
+     * 由 ViewModel 在打开设置时于 IO 线程统计一次 —— 三个存储都在磁盘上，
+     * 不能在界面里读（见 [ExtensionSummary] 的说明）。
+     */
+    val extensions: ExtensionSummary = ExtensionSummary(),
 ) {
     val activeSession: SessionSummary?
         get() = sessions.firstOrNull { it.id == activeSessionId }
 
     val contextFraction: Float
         get() = if (contextWindow <= 0) 0f else (contextTokens.toFloat() / contextWindow).coerceIn(0f, 1f)
+
+    /** 某个页面动作是否在跑（见 [ActionBusy]）。 */
+    fun isBusy(key: String): Boolean = key in inFlight
 }
 
 /** 与上游原版 IQ Code 一致的斜杠命令表（/help 显示，面板按前缀过滤）。 */
@@ -879,14 +900,14 @@ val SLASH_COMMANDS: List<SlashCommand> = listOf(
     SlashCommand("/permissions", "设置工具调用权限模式"),
     SlashCommand("/root", "Agent Root：on / off / check"),
     SlashCommand("/keepalive", "强制后台保活：on / off / check"),
-    SlashCommand("/mcp", "配置和管理 MCP 服务器"),
+    SlashCommand("/mcp", "配置和管理 MCP 服务器；/mcp list · add · enable · disable · remove <名称>"),
     SlashCommand("/web", "联网搜索设置；也可直接输入 /web 搜索词"),
     SlashCommand("/terminal", "打开内置 Termux 终端"),
     SlashCommand("/sandbox", "打开 ZhiCode 沙箱；Agent 可安装、运行和调试虚拟 APK"),
     SlashCommand("/files", "打开项目文件与代码编辑器"),
     SlashCommand("/doctor", "检查 Termux 运行环境"),
     SlashCommand("/repair", "修复中断的 apt/dpkg 状态"),
-    SlashCommand("/skills", "为下一条任务附加本地 Skill"),
+    SlashCommand("/skills", "为下一条任务附加本地 Skill；带名称直接附加，例如 /skills pdf"),
     SlashCommand("/status", "查看模型、项目、上下文、运行时和会话状态"),
     SlashCommand("/stats", "查看当前会话与运行状态"),
     SlashCommand("/usage", "查看当前上下文使用情况"),

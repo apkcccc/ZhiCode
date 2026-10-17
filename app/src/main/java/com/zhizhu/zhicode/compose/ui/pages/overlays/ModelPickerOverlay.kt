@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages.overlays
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +40,9 @@ import com.zhizhu.zhicode.compose.ui.ZhiMotion
 import com.zhizhu.zhicode.compose.ui.ZhiSectionLabel
 import com.zhizhu.zhicode.compose.ui.ZhiSegmentedTabs
 import com.zhizhu.zhicode.compose.ui.ZhiTextField
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogShell
+import com.zhizhu.zhicode.compose.ui.dialogs.PrimaryButton
+import com.zhizhu.zhicode.compose.ui.dialogs.SecondaryButton
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults

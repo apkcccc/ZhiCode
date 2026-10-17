@@ -23,9 +23,11 @@
 
 ### 当前 UI 边界
 
+- `ui/pages/` 是**页面层**：一个页面一个文件、文件名即入口名（`ChatPage` / `SettingsPage` / …），
+  浮层在 `ui/pages/overlays/`。`AppScaffold.kt` 只留主题、导航栈与路由。
 - `ui/WorkspaceLayouts.kt` 负责宽窄屏工作区、页签与 Pager；主板块禁用横向手势，点击页签是唯一切换入口。
-- `ui/panes/` 承载终端、文件与编辑器面板；文件的实际复制 / 移动等操作仍由 `state/WorkspaceViewModel` 与
-  `core/FileOps` 负责。
+- `ui/panes/` 承载终端、文件与编辑器面板的**共享外框**（标题栏、抽屉、扩展键、对话框）；
+  文件的实际复制 / 移动等操作仍由 `state/WorkspaceViewModel` 与 `core/FileOps` 负责。
 - 编辑器是**独立 Activity**（`.editor.EditorActivity`，`android:process=":editor"`），
   返回键与输入法只有一个主人；Sora 的 `AndroidView` 配置集中在编辑器宿主文件里。
 - `ui/chat/` 按回合块渲染对话；Markdown 表格在自己的横向滚动容器里，超长正文默认有界预览，
@@ -56,15 +58,18 @@ app/src/main/java/
     compose/
       MainActivity.kt           ComponentActivity → setContent { ZhiCodeApp() }
       ZhiCodeApplication.kt     进程角色判定与启动期装配
-      theme/                    颜色 / 圆角 / 动效 / 字阶 token
-      model/                    UiModels（含 WorkspaceUiState）、ToolKind、TurnLayout 等
+      theme/                    圆角 / 动效 / 字阶 token + 主题入口（颜色全部来自 Miuix）
+      model/                    UiModels（含 WorkspaceUiState）、ActionBusy、ToolKind、TurnLayout 等
       data/                     数据层（API 配置、MCP、记忆、会话、Git 变更…）
       state/WorkspaceViewModel  StateFlow<WorkspaceUiState> + 引擎事件
       engine/                   引擎控制器（ZhiEngineController）与流式合并
       runtime/  editor/         运行时安装器与编辑器宿主
       ui/Common.kt              ★ Miuix 组件的唯一转发层（Zhi* 包装与 token）
-      ui/AppScaffold.kt         Scaffold + 宽窄屏布局 + 弹窗挂载点
-      ui/chat/  ui/composer/  ui/panes/  ui/dialogs/  ui/settings/  ui/sandbox/  ui/debug/
+      ui/AppScaffold.kt         主题 + 导航栈 + 页面路由（页面内容不在这个文件里）
+      ui/pages/                 ★ 一个页面一个文件（WorkspacePage / ChatPage / SettingsPage …）
+      ui/pages/overlays/        浮层（权限 / 计划 / 选择器 / 任务清单 / 模型 / 附件 / 环境 / 调试）
+      ui/PageFeedback.kt        非对话页与整页的操作反馈条
+      ui/chat/  ui/composer/  ui/panes/  ui/dialogs/  ui/settings/  ui/debug/   共享组件与外框
     sandbox/                    沙箱宿主层（ZhiSandbox、SandboxProcess、SandboxRpc…、SandboxFrida、SandboxGuestDebug）
     background/                 前台保活
 Bcore/  black-reflection/  compiler/    第三方（Apache-2.0）

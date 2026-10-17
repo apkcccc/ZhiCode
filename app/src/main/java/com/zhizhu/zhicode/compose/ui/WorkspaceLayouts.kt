@@ -35,8 +35,10 @@ import androidx.compose.ui.unit.dp
 import com.zhizhu.zhicode.compose.model.WorkspaceTab
 import com.zhizhu.zhicode.compose.model.WorkspaceUiState
 import com.zhizhu.zhicode.compose.state.WorkspaceViewModel
-import com.zhizhu.zhicode.compose.ui.panes.FilesPane
-import com.zhizhu.zhicode.compose.ui.panes.TerminalPane
+import com.zhizhu.zhicode.compose.ui.pages.ChatPage
+import com.zhizhu.zhicode.compose.ui.pages.FilesPage
+import com.zhizhu.zhicode.compose.ui.pages.TerminalPage
+import com.zhizhu.zhicode.compose.ui.pages.ZhiAnchoredMenuHost
 import top.yukonga.miuix.kmp.utils.PagerNavigationSpringSpec
 import top.yukonga.miuix.kmp.utils.springAnimateToPage
 import kotlinx.coroutines.launch
@@ -69,7 +71,7 @@ internal fun WideWorkspace(
                 onSettings = viewModel::openSettings,
                 tabs = null,
             )
-            ChatArea(state = state, viewModel = viewModel, wide = true, modifier = Modifier.weight(1f), glass = glass)
+            ChatPage(state = state, viewModel = viewModel, wide = true, modifier = Modifier.weight(1f), glass = glass)
         }
         ZhiVerticalDivider()
         Column(modifier = Modifier.weight(44f)) {
@@ -183,7 +185,7 @@ private fun WorkspacePager(
         key = { tabs[it] },
         pageContent = { page ->
             when (tabs[page]) {
-                WorkspaceTab.CHAT -> ChatArea(
+                WorkspaceTab.CHAT -> ChatPage(
                     state = state,
                     viewModel = viewModel,
                     wide = !compact,
@@ -296,7 +298,7 @@ private fun PaneHost(
     tabOverride: WorkspaceTab? = null,
 ) {
     when (val tab = tabOverride ?: state.tab) {
-        WorkspaceTab.TERMINAL -> TerminalPane(
+        WorkspaceTab.TERMINAL -> TerminalPage(
             lines = state.terminalLines,
             projectName = state.projectName,
             // 内置 Termux 环境是否就绪决定这个是"真终端"还是"只读占位"。
@@ -307,9 +309,15 @@ private fun PaneHost(
             // PaneHost 用 when(tab) 切面板，切走会让这段 Composable 离开组合，
             // 实例若建在这里就会连会话一起被销毁（见 TerminalHolder 的注释）。
             terminalHolder = { ctx -> viewModel.terminalPane(ctx) },
+            // 环境未就绪时的三态入口：未安装 / 安装中（进度）/ 失败（可重试）。
+            // 以前只有一句说明，用户得自己去设置里找"安装运行环境"。
+            installing = state.runtimeInstalling,
+            progress = state.runtimeProgress,
+            message = state.runtimeMessage,
+            onInstall = viewModel::installRuntime,
             modifier = modifier,
         )
-        WorkspaceTab.FILES -> FilesPane(
+        WorkspaceTab.FILES -> FilesPage(
             filePath = state.filePath,
             entries = state.fileEntries,
             emptyNote = state.fileNote,
@@ -351,7 +359,7 @@ private fun PaneHost(
             onAttachSelected = viewModel::attachSelectedEntries,
             modifier = modifier,
         )
-        WorkspaceTab.CHAT -> ChatArea(state = state, viewModel = viewModel, wide = false, modifier = modifier, glass = glass)
+        WorkspaceTab.CHAT -> ChatPage(state = state, viewModel = viewModel, wide = false, modifier = modifier, glass = glass)
     }
 }
 

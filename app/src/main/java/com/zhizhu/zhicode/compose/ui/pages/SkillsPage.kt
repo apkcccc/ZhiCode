@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -52,11 +52,14 @@ import com.zhizhu.zhicode.compose.ui.ZhiLoadingIndicator
 import com.zhizhu.zhicode.compose.ui.ZhiMotion
 import com.zhizhu.zhicode.compose.ui.ZhiSmallPill
 import com.zhizhu.zhicode.compose.ui.ZhiTextField
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogShell
+import com.zhizhu.zhicode.compose.ui.dialogs.ZhiDialogWidth
 import com.zhizhu.zhicode.compose.ui.settings.SettingsGroup
 import com.zhizhu.zhicode.compose.ui.settings.SettingsLoadingHint
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageKey
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageStack
 import com.zhizhu.zhicode.compose.ui.settings.SettingsSubPage
+import com.zhizhu.zhicode.compose.ui.rememberActionBusy
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
@@ -112,7 +115,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * [rememberLastNonNull] 兜住，否则退场那 260ms 会画成一张空卡。
  */
 @Composable
-fun SkillsOverlay(
+fun SkillsPage(
     state: SkillsState?,
     onDismiss: () -> Unit,
     onQueryChange: (String) -> Unit,
@@ -163,8 +166,13 @@ fun SkillsOverlay(
     }
 
     // 「返回」是逐级回退：关掉正在编辑的对话框 → 详情 → 列表 → 关掉整页。
+    // 正在编辑且有未保存改动时先问一次（判定在 SkillEditTarget.dirty）。
+    var confirmDiscardEdit by remember { mutableStateOf(false) }
+    val requestCancelEdit: () -> Unit = {
+        if (state.editing?.dirty == true) confirmDiscardEdit = true else onCancelEdit()
+    }
     val onBack: () -> Unit = when {
-        state.editing != null -> onCancelEdit
+        state.editing != null -> requestCancelEdit
         state.detail != null -> onCloseDetail
         else -> onDismiss
     }
@@ -199,7 +207,7 @@ fun SkillsOverlay(
                                 target = it,
                                 onBodyChange = onBodyChange,
                                 onSave = onSave,
-                                onDismiss = onCancelEdit,
+                                onDismiss = requestCancelEdit,
                             )
                         }
                         fileDraft?.let {
@@ -295,6 +303,15 @@ fun SkillsOverlay(
             }
         }
     }
+
+    UnsavedChangesDialog(
+        visible = confirmDiscardEdit,
+        onKeepEditing = { confirmDiscardEdit = false },
+        onDiscard = {
+            confirmDiscardEdit = false
+            onCancelEdit()
+        },
+    )
 }
 
 // ------------------------------------------------------------------ 添加技能的选择表
@@ -426,16 +443,30 @@ private fun SkillListBody(
                                 modifier = Modifier.fillMaxWidth()
                                     .padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
                             )
-                            // 每张技能各一张卡（与参考实现一致）：整组塞在一张卡里时，
-                            // 长长的技能说明会把相邻的两条糊成一块。
-                            state.visibleSkills.forEach { skill ->
-                                SkillRow(
-                                    skill = skill,
-                                    onOpen = { onOpenDetail(skill) },
-                                    onEdit = { onEdit(skill, "SKILL.md") },
-                                    onAttach = { onAttach(skill) },
-                                    onDelete = { onDelete(skill) },
+                            // 按作用域分组（项目级在前）：两级的同名技能可以共存，
+                            // 平铺时只能靠行尾的小胶囊区分，扫一眼很容易拿错。
+                            // 筛选词命中跨两级时各自成组，组的标题带数量。
+                            listOf(SkillScope.PROJECT, SkillScope.USER).forEach { scope ->
+                                val group = state.visibleSkills.filter { it.scope == scope }
+                                if (group.isEmpty()) return@forEach
+                                Text(
+                                    text = "${scope.label} · ${group.size}",
+                                    color = scheme.onSurfaceVariantSummary,
+                                    fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .padding(start = 16.dp, top = 6.dp, bottom = 2.dp),
                                 )
+                                // 每张技能各一张卡（与参考实现一致）：整组塞在一张卡里时，
+                                // 长长的技能说明会把相邻的两条糊成一块。
+                                group.forEach { skill ->
+                                    SkillRow(
+                                        skill = skill,
+                                        onOpen = { onOpenDetail(skill) },
+                                        onEdit = { onEdit(skill, "SKILL.md") },
+                                        onAttach = { onAttach(skill) },
+                                        onDelete = { onDelete(skill) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -604,6 +635,46 @@ private fun SkillDetailBody(
             fontSize = MiuixTheme.textStyles.footnote2.fontSize,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         )
+
+        SettingsGroup("SKILL.md 预览") {
+            // 详情页此前只有文件树：想知道这个技能到底教 Agent 做什么，得先点进编辑器。
+            // 这里给一份**只读**预览（前 20 行），看内容确认是哪一个技能再决定要不要编辑。
+            val preview = detail.body.lineSequence().take(SKILL_PREVIEW_LINES).joinToString("\n")
+            when {
+                detail.body.isBlank() && detail.entry.sizeLabel.isNotBlank() -> Text(
+                    text = "读不到正文（可能是权限或文件被删除）。",
+                    color = scheme.error,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+                else -> Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    if (preview.isBlank()) {
+                        Text(
+                            text = "SKILL.md 是空的。",
+                            color = scheme.onSurfaceVariantSummary,
+                            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                        )
+                    } else {
+                        Text(
+                            text = preview,
+                            color = scheme.onSurface,
+                            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        val total = detail.body.lines().size
+                        if (total > SKILL_PREVIEW_LINES) {
+                            Text(
+                                text = "…共 $total 行，编辑 SKILL.md 看全文。",
+                                color = scheme.onSurfaceVariantSummary,
+                                fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+                                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         SettingsGroup("文件") {
             // 「目录里一个文件都没有」与「有文件树」之间淡变。
@@ -841,7 +912,7 @@ private fun SkillCreateDialog(
                 TextButton(
                     text = "保存",
                     onClick = onConfirm,
-                    enabled = draft.saveable,
+                    enabled = draft.saveable && !rememberActionBusy("skills.create"),
                     modifier = Modifier.padding(start = 8.dp),
                 )
             },
@@ -1009,7 +1080,7 @@ private fun SkillEditDialog(
                 TextButton(
                     text = "保存",
                     onClick = onSave,
-                    enabled = target.saveable,
+                    enabled = target.saveable && !rememberActionBusy("skills.save"),
                     modifier = Modifier.padding(start = 8.dp),
                 )
             },
@@ -1056,6 +1127,9 @@ private fun SkillEditDialog(
  * 397 行以后的内容在测试眼里全部消失）。这里一直没暴露，只是因为被删掉的那段
  * 恰好没有断言要检的 token。
  */
+/** 详情页 SKILL.md 预览的行数上限：够认出"这是哪一个技能"，又不至于把整份文档铺开。 */
+private const val SKILL_PREVIEW_LINES = 20
+
 private val SkillImportMimeTypes = arrayOf(
     listOf("text", "*").joinToString("/"),
     "application/octet-stream",

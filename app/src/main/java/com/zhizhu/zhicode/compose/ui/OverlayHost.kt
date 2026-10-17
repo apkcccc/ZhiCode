@@ -7,13 +7,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import com.zhizhu.zhicode.compose.model.WorkspaceUiState
 import com.zhizhu.zhicode.compose.state.WorkspaceViewModel
-import com.zhizhu.zhicode.compose.ui.dialogs.AttachFileOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.ChoicePickerOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.EnvironmentOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.ModelPickerOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.PermissionOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.PlanApprovalOverlay
-import com.zhizhu.zhicode.compose.ui.dialogs.TaskListOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.AttachFileOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.ChoicePickerOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.EnvironmentOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.ModelPickerOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.PermissionOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.PlanApprovalOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.TaskListOverlay
 
 /**
  * 弹窗挂载宿主：从 `ZhiCodeScreen` 原地拆出，内容逐字未改。

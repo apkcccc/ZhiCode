@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +35,13 @@ import com.zhizhu.zhicode.compose.state.WorkspaceViewModel
 import com.zhizhu.zhicode.compose.ui.chat.AgentProgressCard
 import com.zhizhu.zhicode.compose.ui.chat.ChatList
 import com.zhizhu.zhicode.compose.ui.composer.Composer
+import com.zhizhu.zhicode.compose.ui.FloatingBottomShell
+import com.zhizhu.zhicode.compose.ui.Glass
+import com.zhizhu.zhicode.compose.ui.LocalImeMotion
+import com.zhizhu.zhicode.compose.ui.MessageBar
+import com.zhizhu.zhicode.compose.ui.TopBarInsetCompact
+import com.zhizhu.zhicode.compose.ui.ZhiAnchoredActionMenu
+import com.zhizhu.zhicode.compose.ui.ZhiMotion
 import com.zhizhu.zhicode.compose.ui.debug.ZhiFrameTrace
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import com.zhizhu.zhicode.compose.theme.ZhiRadius
@@ -79,7 +86,7 @@ private val ImageMimeTypes = arrayOf(listOf("image", "*").joinToString("/"))
 
 /** （从 `AppScaffold.kt` 原地拆出，内容逐字未改。） */
 @Composable
-internal fun ChatArea(
+internal fun ChatPage(
     state: WorkspaceUiState,
     viewModel: WorkspaceViewModel,
     wide: Boolean,

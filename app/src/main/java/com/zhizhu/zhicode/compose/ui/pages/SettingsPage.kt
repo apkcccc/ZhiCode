@@ -1,6 +1,6 @@
 @file:OptIn(top.yukonga.miuix.kmp.interfaces.ExperimentalScrollBarApi::class)
 
-package com.zhizhu.zhicode.compose.ui.settings
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.zhizhu.zhicode.compose.model.COMPACT_PERCENT_MAX
 import com.zhizhu.zhicode.compose.model.COMPACT_PERCENT_MIN
 import com.zhizhu.zhicode.compose.model.EffortLevel
+import com.zhizhu.zhicode.compose.model.ExtensionSummary
 import com.zhizhu.zhicode.compose.model.PermissionMode
 import com.zhizhu.zhicode.compose.model.SettingsDraft
 import com.zhizhu.zhicode.compose.model.ThemeMode
@@ -40,7 +41,16 @@ import com.zhizhu.zhicode.compose.model.WEB_TIMEOUT_MAX_SEC
 import com.zhizhu.zhicode.compose.model.WEB_TIMEOUT_MIN_SEC
 import com.zhizhu.zhicode.compose.model.formatTokenCountShort
 import com.zhizhu.zhicode.compose.model.parseTokenCount
+import com.zhizhu.zhicode.compose.ui.PageFeedbackSlot
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
+import com.zhizhu.zhicode.compose.ui.settings.SettingsChoice
+import com.zhizhu.zhicode.compose.ui.settings.SettingsEntry
+import com.zhizhu.zhicode.compose.ui.settings.SettingsGroup
+import com.zhizhu.zhicode.compose.ui.settings.SettingsIconPlate
+import com.zhizhu.zhicode.compose.ui.settings.SettingsIntField
+import com.zhizhu.zhicode.compose.ui.settings.SettingsPlateColors
+import com.zhizhu.zhicode.compose.ui.settings.SettingsTextField
+import com.zhizhu.zhicode.compose.ui.settings.SettingsToggle
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.VerticalScrollBar
@@ -99,11 +109,18 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  *   `上下文压缩`（缩放/绿）与 `自动压缩上限`（滑杆/绿）同底色不同字形。
  */
 @Composable
-fun SettingsDialog(
+fun SettingsPage(
     draft: SettingsDraft?,
     onChange: (SettingsDraft) -> Unit,
     onDismiss: () -> Unit,
     onNavigate: (String) -> Unit,
+    /**
+     * 「扩展」组的数量摘要（MCP / 技能 / 角色卡）。
+     *
+     * 默认空摘要 = 未统计，界面显示"正在统计…"。页面自身不读盘：
+     * 三个存储都在磁盘上，在设置页里读会变成"每次重组读一次"。
+     */
+    extensions: ExtensionSummary = ExtensionSummary(),
 ) {
     // 整页设置，骨架全部用 Miuix 原生组件，照官方 example 的 SettingsPage 模式：
     // Scaffold + SmallTopAppBar(MiuixScrollBehavior) + LazyColumn(overScroll+nestedScroll)。
@@ -166,7 +183,7 @@ fun SettingsDialog(
                 }
                 item(key = "context", contentType = "settings-group") { SettingsGroup("上下文与项目") { ContextProjectPage(draft, onChange) } }
                 item(key = "agent", contentType = "settings-group") { SettingsGroup("Agent 与安全") { AgentSecurityPage(draft, onChange) } }
-                item(key = "extensions", contentType = "settings-group") { SettingsGroup("扩展") { ExtensionsPage(onNavigate) } }
+                item(key = "extensions", contentType = "settings-group") { SettingsGroup("扩展") { ExtensionsPage(onNavigate, extensions) } }
             }
             // Miuix 原生滚动条
             VerticalScrollBar(
@@ -175,6 +192,9 @@ fun SettingsDialog(
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight(),
             )
+            // 设置页是自动保存，但"保存失败""已切换 API 配置"这类反馈仍然要看得见。
+            // 原先这些消息只落在对话页的 MessageBar 上，而在设置页里根本看不到。
+            PageFeedbackSlot(modifier = Modifier.align(Alignment.BottomCenter))
         }
     }
 }
@@ -494,27 +514,53 @@ private fun ProjectPathField(draft: SettingsDraft, onChange: (SettingsDraft) -> 
  *   已经并入「上下文与项目」分类，同一个字段不需要两条路径，入口撤销。
  */
 @Composable
-private fun ExtensionsPage(onNavigate: (String) -> Unit) {
+private fun ExtensionsPage(onNavigate: (String) -> Unit, extensions: ExtensionSummary) {
     // rikkahub 式入口行：图标 + 标题 + 副标题；Miuix 用 ArrowPreference 的 startAction。
     // 注意：这里不放「API 配置」——那条带当前生效值的入口留在上面的
     // 「模型与对话」组里，同一目标只保留一条路径（hub 的规矩）。
+    //
+    // 每一行的副标题带**当前数量**（rikkahub 的扩展入口也是"标题 + 当前值"）：
+    // 之前这里是四句固定说明，想确认"那个 MCP 服务器还在不在"得点进去再退回来。
+    // 数量由 ViewModel 在打开设置时统计一次（三个存储都在磁盘上，界面里不读盘）。
     SettingsIconEntry(
         title = "Model Context Protocol（MCP）",
-        summary = "MCP 服务器配置",
+        summary = if (!extensions.loaded) {
+            "正在统计…"
+        } else {
+            buildString {
+                append("${extensions.mcpTotal} 台服务器")
+                if (extensions.mcpTotal > 0) {
+                    append(" · ${extensions.mcpEnabled} 台启用")
+                    if (extensions.mcpConnected > 0) append(" · ${extensions.mcpConnected} 台已连接")
+                } else {
+                    append(" · 还没有配置")
+                }
+            }
+        },
         icon = ZhiIcons.mindMap,
         plate = SettingsPlateColors.purple,
         onClick = { onNavigate("mcp") },
     )
     SettingsIconEntry(
         title = "Skill 管理器",
-        summary = "项目级与用户级技能模板",
+        summary = if (!extensions.loaded) {
+            "正在统计…"
+        } else if (extensions.skillTotal == 0) {
+            "还没有技能 · 可按需加载的资料包"
+        } else {
+            "${extensions.skillTotal} 个技能 · 项目级 ${extensions.projectSkills} / 用户级 ${extensions.userSkills}"
+        },
         icon = ZhiIcons.skill,
         plate = SettingsPlateColors.purple,
         onClick = { onNavigate("skills") },
     )
     SettingsIconEntry(
         title = "自定义角色卡",
-        summary = "可切换的多份人设指令",
+        summary = when {
+            !extensions.loaded -> "正在统计…"
+            extensions.roleCardTotal == 0 -> "还没有角色卡 · 可切换的多份人设指令"
+            else -> "${extensions.roleCardTotal} 张角色卡 · 同一时刻只有一张生效"
+        },
         icon = ZhiIcons.roleCard,
         plate = SettingsPlateColors.green,
         onClick = { onNavigate("roleCards") },

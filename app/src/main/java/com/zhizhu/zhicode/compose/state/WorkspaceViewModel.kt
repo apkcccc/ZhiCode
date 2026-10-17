@@ -41,6 +41,7 @@ import com.zhizhu.zhicode.compose.runtime.EnvDoctor
 import com.termux.shared.termux.TermuxConstants
 import com.zhizhu.zhicode.RuntimeInstaller
 import com.zhizhu.zhicode.TermuxTerminalPane
+import com.zhizhu.zhicode.compose.model.ActionBusy
 import com.zhizhu.zhicode.compose.model.AgentTask
 import com.zhizhu.zhicode.compose.model.AttachBrowserState
 import com.zhizhu.zhicode.compose.model.ApiConfigState
@@ -54,6 +55,7 @@ import com.zhizhu.zhicode.compose.model.ChatNavigation
 import com.zhizhu.zhicode.compose.model.ChoiceIntent
 import com.zhizhu.zhicode.compose.model.ChoiceOption
 import com.zhizhu.zhicode.compose.model.ChoicePickerState
+import com.zhizhu.zhicode.compose.model.ExtensionSummary
 import com.zhizhu.zhicode.compose.model.EffortLevel
 import com.zhizhu.zhicode.compose.model.FileDeletePrompt
 import com.zhizhu.zhicode.compose.model.FileEntry
@@ -333,6 +335,43 @@ class WorkspaceViewModel(
     )
 
     val state: StateFlow<WorkspaceUiState> = _state.asStateFlow()
+
+    /**
+     * 页面动作的在飞登记表（见 [ActionBusy]）。
+     *
+     * 与 [_state] 分开：判定互斥时读它（不产生 Snapshot 快照），界面读
+     * `state.inFlight` 那份快照。两者由 [runBusy] 一并维护。
+     */
+    private val actions = ActionBusy()
+
+    /**
+     * 跑一个**有互斥语义**的页面动作。
+     *
+     * - 同一个 [key] 已在跑时直接返回：用户双击保存 / 粘贴 / 删除不会做两遍；
+     * - 动作体在 [Dispatchers.IO] 上跑（保存类动作基本都是文件 IO），
+     *   因此 `_state.update` 也允许在动作体里直接调用（它是线程安全的）；
+     * - 结束（含异常）一定释放登记，不会留下永远转圈的按钮。
+     *
+     * 这不替代取消：用户仍可以用"停止"打断 Agent 回合；它只保证**同一次点击不会被放大成两次**。
+     */
+    private fun runBusy(key: String, block: suspend () -> Unit) {
+        if (!actions.acquire(key)) {
+            if (com.zhizhu.zhicode.compose.BuildConfig.DEBUG) {
+                // 调试构建里留一行：双击被吞掉是**设计**，不是"点了没反应"。
+                android.util.Log.d("ZhiCodeBusy", "skip re-entrant action: $key")
+            }
+            return
+        }
+        _state.update { it.copy(inFlight = actions.snapshot()) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                block()
+            } finally {
+                actions.release(key)
+                _state.update { it.copy(inFlight = actions.snapshot()) }
+            }
+        }
+    }
 
     init {
         initSessionState()
@@ -897,7 +936,11 @@ class WorkspaceViewModel(
         }
     }
 
-    fun closeSkills() = _state.update { it.copy(skills = null) }
+    fun closeSkills() {
+        _state.update { it.copy(skills = null) }
+        // 回到设置主页时刷新「扩展」组的数量：刚从技能页增删过，不刷会显示旧数字。
+        refreshExtensions()
+    }
 
     /** 列表页的筛选词。 */
     fun setSkillQuery(query: String) = _state.update {
@@ -912,6 +955,9 @@ class WorkspaceViewModel(
      */
     fun openSkillDetail(entry: SkillEntry) {
         val s = _state.value
+        // 先推页、后读盘：`listTree` 要 walk 整个技能目录并逐文件取大小，
+        // 正文读取更是一次完整读文件。放在点击那一帧上会看到明显延迟，
+        // 而详情页在数据回来之前已经立起来了（显示"读取中"）。
         _state.update {
             it.copy(
                 skills = it.skills?.copy(
@@ -925,6 +971,24 @@ class WorkspaceViewModel(
                     ),
                 ),
             )
+        }
+        // 详情页的只读预览：`SKILL.md` 的正文。
+        // 之前只有文件树，想知道这个技能教 Agent 做什么得先点进编辑器。
+        viewModelScope.launch(Dispatchers.IO) {
+            val body = SkillStore.read(s.projectPath, entry.scope, entry.name).getOrDefault("")
+            _state.update { state ->
+                val current = state.skills?.detail ?: return@update state
+                // 期间用户可能已经关页或换了另一条技能：只更新同一条。
+                if (current.entry.name != entry.name || current.entry.scope != entry.scope) return@update state
+                state.copy(
+                    skills = state.skills.copy(
+                        detail = current.copy(
+                            body = body,
+                            tree = SkillStore.listTree(state.projectPath, entry.scope, entry.name),
+                        ),
+                    ),
+                )
+            }
         }
     }
 
@@ -1086,10 +1150,10 @@ class WorkspaceViewModel(
      * 那样页面栈会一次加两页（列表→详情→编辑器），视觉上就是"出现一个重复的"
      * （用户报过的现象）。要改内容在详情页点 SKILL.md 即可。
      */
-    fun createSkill() {
+    fun createSkill() = runBusy("skills.create") {
         val s = _state.value
-        val form = s.skills?.createForm ?: return
-        if (!form.saveable) return
+        val form = s.skills?.createForm ?: return@runBusy
+        if (!form.saveable) return@runBusy
         val name = form.name.trim()
         val result = SkillStore.create(s.projectPath, form.scope, name, form.content)
         result.fold(
@@ -1381,12 +1445,12 @@ class WorkspaceViewModel(
      * 踩到的错误（`SkillStore.writeFile` 会拒绝），关掉对话框等于让用户重新输入一遍。
      * 保持打开、把原因显示出来，用户改一行就能再存。
      */
-    fun saveSkill() {
+    fun saveSkill() = runBusy("skills.save") {
         val s = _state.value
-        val editing = s.skills?.editing ?: return
-        if (!editing.saveable) return
+        val editing = s.skills?.editing ?: return@runBusy
+        if (!editing.saveable) return@runBusy
         // 与 saveSkillFile 同理：写的是一整份正文 + 写完重列文件树。
-        viewModelScope.launch(Dispatchers.IO) {
+        run {
             val result = SkillStore.writeFile(
                 s.projectPath, editing.scope, editing.name, editing.relativePath, editing.body,
             )
@@ -1488,7 +1552,10 @@ class WorkspaceViewModel(
         }
     }
 
-    fun closeRoleCards() = _state.update { it.copy(roleCards = null) }
+    fun closeRoleCards() {
+        _state.update { it.copy(roleCards = null) }
+        refreshExtensions()
+    }
 
     fun newRoleCard() = _state.update {
         it.copy(roleCards = it.roleCards?.copy(editor = RoleCardEditor()))
@@ -1519,9 +1586,9 @@ class WorkspaceViewModel(
      * 并把内容灌进引擎配置。分三步做是必须的——只写清单不写 activeId 的话，
      * 用户会看到卡保存成功却没有任何效果。
      */
-    fun saveRoleCard() {
-        val editor = _state.value.roleCards?.editor ?: return
-        if (!editor.saveable) return
+    fun saveRoleCard() = runBusy("roleCards.save") {
+        val editor = _state.value.roleCards?.editor ?: return@runBusy
+        if (!editor.saveable) return@runBusy
         val context = getApplication<android.app.Application>()
         val result = RoleCardStore.upsert(
             context,
@@ -1540,24 +1607,24 @@ class WorkspaceViewModel(
     }
 
     /** 启用一张已存在的卡。 */
-    fun selectRoleCard(card: RoleCard) {
+    fun selectRoleCard(card: RoleCard) = runBusy("roleCards.select") {
         val context = getApplication<android.app.Application>()
         val result = RoleCardStore.save(context, RoleCardStore.list(context), card.id)
         if (result.isFailure) {
             _state.update { it.copy(message = "启用失败：${result.exceptionOrNull()?.message ?: "未知原因"}", messageIsError = true) }
-            return
+            return@runBusy
         }
         roleCardOverride = card.content
         refreshRoleCards(message = "已启用角色卡：${card.name}")
         runCatching { engine.configure(engineOverrides()) }
     }
 
-    fun disableRoleCard() {
+    fun disableRoleCard() = runBusy("roleCards.disable") {
         val context = getApplication<android.app.Application>()
         val result = RoleCardStore.save(context, RoleCardStore.list(context), "")
         if (result.isFailure) {
             _state.update { it.copy(message = "停用失败：${result.exceptionOrNull()?.message ?: "未知原因"}", messageIsError = true) }
-            return
+            return@runBusy
         }
         // 覆盖值置成空串（而不是 null）：null 表示"不覆盖"，那会退回配置里的旧值，
         // 于是"停用"看起来没生效——角色卡还挂在系统提示词里。
@@ -1695,9 +1762,9 @@ class WorkspaceViewModel(
         it.copy(memory = it.memory?.copy(editing = null))
     }
 
-    fun saveMemory() {
+    fun saveMemory() = runBusy("memory.save") {
         val state = _state.value
-        val editing = state.memory?.editing ?: return
+        val editing = state.memory?.editing ?: return@runBusy
         val result = MemoryStore.save(state.projectPath, editing.scope, editing.body)
         _state.update {
             it.copy(
@@ -2804,7 +2871,12 @@ class WorkspaceViewModel(
             "/model" -> showModelPicker()
             "/cancel" -> stop()
             "/config" -> openSettings()
-            "/mcp" -> openMcpConfig()
+            // `/mcp` 与 IQ Code 0.30.4 的 `handleMcpSlash` 同一套子命令：
+            // 不带参数打开面板，带参数走 list / add / enable / disable / remove。
+            //
+            // 之前这里**吞掉参数**直接开面板 —— 照着文档敲 `/mcp list` 的用户
+            // 只会看到一个面板，不知道自己敲的其实是有效命令。
+            "/mcp" -> handleMcpSlash(arg)
             "/copy" -> copyLatestAssistantReply()
             "/compact" -> compactContext(arg)
 
@@ -2817,7 +2889,8 @@ class WorkspaceViewModel(
             }
 
             "/tasks" -> openTaskList()
-            "/skills" -> openSkills()
+            // 带参数 = 直接附加那个技能（见 handleSkillsSlash）。
+            "/skills" -> handleSkillsSlash(arg)
             "/agents" -> openRoleCards()
             "/memory" -> openMemory()
             "/init" -> runInitPrompt()
@@ -3424,6 +3497,113 @@ class WorkspaceViewModel(
      * 这里的读写是**同步**的：`McpConfigStore` 只读一个本地小 JSON，
      * 没有网络也没有密钥解密，放 IO 线程反而让状态更新顺序更难推理。
      */
+    /**
+     * `/mcp` 的子命令（对齐 IQ Code 0.30.4 的 `handleMcpSlash`）。
+     *
+     * | 命令 | 行为 |
+     * | --- | --- |
+     * | `/mcp` | 打开配置页 |
+     * | `/mcp list` | 在对话流里列出全部服务器（启用状态 / 类型 / 端点 / 作用域） |
+     * | `/mcp add` | 打开配置页并直接进入「添加」表单 |
+     * | `/mcp enable <名称>` / `disable <名称>` | 切换启用状态 |
+     * | `/mcp remove <名称>`（同 `delete`） | 删除那一条 |
+     *
+     * 打错的子命令**不会**变成一句"已执行"：它会列出支持的命令 ——
+     * 与其它斜杠指令的兜底策略一致（不做假回执）。
+     */
+    private fun handleMcpSlash(arg: String) {
+        val a = arg.trim()
+        if (a.isEmpty()) {
+            openMcpConfig()
+            return
+        }
+        val op = a.substringBefore(' ').lowercase(Locale.US)
+        val name = a.substringAfter(' ', "").trim()
+        when (op) {
+            "list", "列表" -> showMcpSummary()
+            "add", "添加" -> {
+                openMcpConfig()
+                // 数据是异步读的：表单的开合状态由 mcpConfig 承载，所以等它落地再开表单。
+                // 用 ready 标志而不是延时猜：读盘慢的机器上延时一定会错。
+                mcpOpenFormWhenReady = true
+            }
+            "enable", "disable" -> {
+                if (name.isEmpty()) {
+                    _state.update { it.copy(message = "用法：/mcp $op <服务器名称>", messageIsError = true) }
+                    return
+                }
+                val target = _state.value.mcpConfig?.servers?.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                    ?: runCatching { McpStore.read().servers.firstOrNull { it.name.equals(name, ignoreCase = true) } }.getOrNull()
+                if (target == null) {
+                    _state.update { it.copy(message = "未找到 MCP 服务器：$name", messageIsError = true) }
+                    return
+                }
+                val wantEnabled = op == "enable"
+                if (target.enabled == wantEnabled) {
+                    _state.update { it.copy(message = "${target.name} 已经是${if (wantEnabled) "启用" else "停用"}状态") }
+                    return
+                }
+                val result = McpStore.setEnabled(target.name, wantEnabled)
+                _state.update {
+                    it.copy(
+                        message = if (result.isSuccess) {
+                            "${if (wantEnabled) "已启用" else "已停用"}：${target.name}"
+                        } else {
+                            "保存失败：${result.exceptionOrNull()?.message ?: "未知原因"}"
+                        },
+                        messageIsError = result.isFailure,
+                    )
+                }
+            }
+            "remove", "delete", "删除" -> {
+                if (name.isEmpty()) {
+                    _state.update { it.copy(message = "用法：/mcp $op <服务器名称>", messageIsError = true) }
+                    return
+                }
+                val result = McpStore.delete(name)
+                _state.update {
+                    it.copy(
+                        message = if (result.isSuccess) "已删除 MCP 服务器：$name"
+                        else "删除失败：${result.exceptionOrNull()?.message ?: "未知原因"}",
+                        messageIsError = result.isFailure,
+                    )
+                }
+            }
+            else -> _state.update {
+                it.copy(
+                    message = "/mcp 支持：list、add、enable <名称>、disable <名称>、remove <名称>",
+                    messageIsError = true,
+                )
+            }
+        }
+    }
+
+    /** `/mcp add` 要等异步读盘结束后再打开表单（见 [handleMcpSlash]）。 */
+    private var mcpOpenFormWhenReady = false
+
+    /**
+     * `/mcp list`：把服务器清单写进对话流（与 IQ Code 的 `showMcpSummary` 一样
+     * 落在对话里而不是弹窗里 —— 用户多半是"想看一眼再接着干活"）。
+     */
+    private fun showMcpSummary() {
+        val servers = runCatching { McpStore.read().servers }.getOrDefault(emptyList())
+        val body = buildString {
+            if (servers.isEmpty()) {
+                append("当前没有配置 MCP 服务器。输入 `/mcp` 打开配置页。")
+            } else {
+                servers.forEach { server ->
+                    append(if (server.enabled) "● " else "○ ")
+                    append("**").append(server.name).append("** · `").append(server.type.value).append("`")
+                    append(" · ").append(if (server.scope == com.zhizhu.zhicode.compose.model.McpScope.PROJECT) "项目" else "用户")
+                    append('\n')
+                    append("  `").append(if (server.type.needsCommand) server.command else server.url).append("`")
+                    append("\n\n")
+                }
+            }
+        }
+        appendInfo("MCP 服务器", body.trimEnd())
+    }
+
     fun openMcpConfig() {
         // 见 hideSidebarForNavigation：侧栏里点进来的行必须先收起侧栏。
         hideSidebarForNavigation()
@@ -3445,12 +3625,51 @@ class WorkspaceViewModel(
             _state.update { s ->
                 // 读盘期间用户可能已经返回：载荷已置空，结果丢弃。
                 val current = s.mcpConfig ?: return@update s
-                s.copy(mcpConfig = loaded ?: current.copy(loading = false))
+                var next = loaded ?: current.copy(loading = false)
+                // `/mcp add`：读盘完成后直接进「添加」表单（见 handleMcpSlash）。
+                if (mcpOpenFormWhenReady) {
+                    mcpOpenFormWhenReady = false
+                    // 新建表单：`originalName = null` 才表示"新增"（见 McpServerDraft.isEditing）。
+                    next = next.copy(form = McpServerDraft(originalName = null))
+                }
+                s.copy(mcpConfig = next)
             }
         }
     }
 
-    fun closeMcpConfig() = _state.update { it.copy(mcpConfig = null) }
+    fun closeMcpConfig() {
+        _state.update { it.copy(mcpConfig = null) }
+        refreshExtensions()
+    }
+
+    /**
+     * `/skills` 的子命令（对齐 IQ Code 0.30.4 的 `/skills`：
+     * 不带参数列清单，`<名称>` 直接把那份技能附加到下一条消息）。
+     *
+     * 之前这里**吞掉参数**直接开管理器 —— 敲 `/skills pdf` 的用户
+     * 期望的是"把 pdf 这个技能挂上"，而不是打开一个列表再自己找。
+     */
+    private fun handleSkillsSlash(arg: String) {
+        val name = arg.trim()
+        if (name.isEmpty()) {
+            openSkills()
+            return
+        }
+        // 同名的项目级与用户级可以共存：优先项目级（更贴近当前工作目录）。
+        val skills = runCatching { SkillStore.list(_state.value.projectPath) }.getOrDefault(emptyList())
+        val target = skills.firstOrNull { it.name.equals(name, ignoreCase = true) && it.scope == SkillScope.PROJECT }
+            ?: skills.firstOrNull { it.name.equals(name, ignoreCase = true) }
+        if (target == null) {
+            _state.update {
+                it.copy(
+                    message = "未找到技能：$name（输入 /skills 看清单）",
+                    messageIsError = true,
+                )
+            }
+            return
+        }
+        attachSkill(target)
+    }
 
     fun newMcpServer() = _state.update {
         it.copy(mcpConfig = it.mcpConfig?.copy(form = McpServerDraft(originalName = null)))
@@ -3480,43 +3699,57 @@ class WorkspaceViewModel(
         it.copy(mcpConfig = it.mcpConfig?.copy(form = null))
     }
 
-    fun saveMcpServer() {
-        val form = _state.value.mcpConfig?.form ?: return
-        if (!form.saveable) return
+    fun setMcpQuery(query: String) = _state.update {
+        it.copy(mcpConfig = it.mcpConfig?.copy(query = query))
+    }
+
+    fun saveMcpServer() = runBusy("mcp.save") {
+        val form = _state.value.mcpConfig?.form ?: return@runBusy
+        if (!form.saveable) return@runBusy
         val result = McpStore.save(form)
         _state.update {
             it.copy(
-                mcpConfig = McpStore.read(),
+                // 成功时表单要关掉，否则用户会停在"已保存"的表单上再点一次。
+                // 关闭动作在保存成功后做，失败时**保留表单**（内容不能丢）。
+                mcpConfig = McpStore.read().let { fresh ->
+                    if (result.isSuccess) fresh.copy(query = it.mcpConfig?.query.orEmpty()) else fresh
+                },
                 message = if (result.isSuccess) "MCP 配置已保存"
                 else "保存失败：${result.exceptionOrNull()?.message ?: "未知原因"}",
+                messageIsError = result.isFailure,
             )
         }
+        refreshExtensions()
     }
 
     /** 启用 / 停用：整行点击触发，等价于原版行尾的「启用/停用」按钮。 */
-    fun toggleMcpServer(server: McpServer) {
+    fun toggleMcpServer(server: McpServer) = runBusy("mcp.toggle") {
         val result = McpStore.setEnabled(server.name, !server.enabled)
         _state.update {
             it.copy(
-                mcpConfig = McpStore.read(),
+                mcpConfig = McpStore.read().copy(query = it.mcpConfig?.query.orEmpty()),
                 message = when {
                     result.isFailure -> "保存失败：${result.exceptionOrNull()?.message ?: "未知原因"}"
                     server.enabled -> "已停用：${server.name}"
                     else -> "已启用：${server.name}"
                 },
+                messageIsError = result.isFailure,
             )
         }
+        refreshExtensions()
     }
 
-    fun deleteMcpServer(server: McpServer) {
+    fun deleteMcpServer(server: McpServer) = runBusy("mcp.delete") {
         val result = McpStore.delete(server.name)
         _state.update {
             it.copy(
-                mcpConfig = McpStore.read(),
+                mcpConfig = McpStore.read().copy(query = it.mcpConfig?.query.orEmpty()),
                 message = if (result.isSuccess) "已删除 MCP 服务器：${server.name}"
                 else "删除失败：${result.exceptionOrNull()?.message ?: "未知原因"}",
+                messageIsError = result.isFailure,
             )
         }
+        refreshExtensions()
     }
 
     /**
@@ -3581,6 +3814,57 @@ class WorkspaceViewModel(
     }
 
     /**
+     * 「全部测试」：一次把**所有启用的**服务器都连一遍。
+     *
+     * 与逐台测试的关键差别：引擎的 `mcpStatus()` 本来就是"列全部启用的服务器"，
+     * 所以批量测试**只调用它一次**，而不是循环调 N 次 —— 后者会把每台服务器
+     * 重复启动 N 遍，代价是 N 倍，而且中间结果会互相覆盖。
+     *
+     * 结果整体替换 `status`（而不是并进旧的）：批量测试的语义就是"现在每台分别是什么状态"，
+     * 保留旧值会让停用/已删除的条目继续显示"已连接"。
+     */
+    fun testAllMcpServers() {
+        val config = _state.value.mcpConfig ?: return
+        if (config.servers.none { it.enabled }) {
+            _state.update { it.copy(message = "没有启用中的服务器可测试", messageIsError = true) }
+            return
+        }
+        if (config.testing.isNotEmpty()) return
+        val names = config.servers.filter { it.enabled }.map { it.name }
+        viewModelScope.launch {
+            _state.update { state ->
+                val current = state.mcpConfig ?: return@update state
+                state.copy(mcpConfig = current.copy(testing = names.toSet()))
+            }
+            val result = withContext(Dispatchers.IO) { engine.mcpStatus() }
+            _state.update { state ->
+                val current = state.mcpConfig ?: return@update state
+                result.fold(
+                    onSuccess = { rows ->
+                        val connected = rows.count { it.connected }
+                        state.copy(
+                            mcpConfig = current.copy(
+                                testing = emptySet(),
+                                status = rows.associateBy { it.name },
+                            ),
+                            message = "测试完成：$connected / ${rows.size} 台已连接",
+                            messageIsError = connected < rows.size,
+                        )
+                    },
+                    onFailure = { error ->
+                        state.copy(
+                            mcpConfig = current.copy(testing = emptySet()),
+                            message = "测试失败：${error.message ?: "未知原因"}",
+                            messageIsError = true,
+                        )
+                    },
+                )
+            }
+            refreshExtensions()
+        }
+    }
+
+    /**
      * 打开「从 JSON 导入」对话框。
      */
     fun openMcpImport() = _state.update {
@@ -3601,8 +3885,8 @@ class WorkspaceViewModel(
      * 执行导入。同名**跳过不覆盖**（用户可能已经在本机改过那份配置），
      * 认不出的条目也一并报出来 —— 只说"导入完成"会让用户以为全都进来了。
      */
-    fun importMcpJson() {
-        val text = _state.value.mcpConfig?.importText ?: return
+    fun importMcpJson() = runBusy("mcp.import") {
+        val text = _state.value.mcpConfig?.importText ?: return@runBusy
         val result = McpStore.importJson(text)
         result.fold(
             onSuccess = { imported ->
@@ -3632,6 +3916,7 @@ class WorkspaceViewModel(
                 }
             },
         )
+        if (result.isSuccess) refreshExtensions()
     }
 
     /**
@@ -5353,13 +5638,48 @@ class WorkspaceViewModel(
      *
      * 之后的编辑全部落在 draft 上，「取消」丢弃 draft 即可，不需要回滚任何东西。
      */
-    fun openSettings() = _state.update {
-        it.copy(
-            settingsOpen = true,
-            // 见 hideSidebarForNavigation：点侧栏里的入口要先收起侧栏。
-            sidebarOpen = false,
-            settingsDraft = SettingsDraft.from(it),
-        )
+    fun openSettings() {
+        _state.update {
+            it.copy(
+                settingsOpen = true,
+                // 见 hideSidebarForNavigation：点侧栏里的入口要先收起侧栏。
+                sidebarOpen = false,
+                settingsDraft = SettingsDraft.from(it),
+            )
+        }
+        refreshExtensions()
+    }
+
+    /**
+     * 统计「扩展」组要显示的数量（MCP / 技能 / 角色卡）。
+     *
+     * 三个存储都在磁盘上：`mcp.json` 解析、技能目录 walk、角色卡列表读。
+     * 所以**只能在 IO 线程读一次**，不能在设置页里读（那会变成"每次重组读一次盘"）。
+     * 打开设置时算一次、从扩展页返回时再算一次就够 —— 这些数量不会在页面停留期间变。
+     */
+    fun refreshExtensions() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val projectPath = _state.value.projectPath
+            val summary = ExtensionSummary(
+                mcpTotal = runCatching { McpStore.read().servers.size }.getOrDefault(0),
+                mcpEnabled = runCatching { McpStore.read().servers.count { it.enabled } }.getOrDefault(0),
+                skillTotal = runCatching { SkillStore.list(projectPath).size }.getOrDefault(0),
+                projectSkills = runCatching {
+                    SkillStore.list(projectPath).count { it.scope == com.zhizhu.zhicode.compose.model.SkillScope.PROJECT }
+                }.getOrDefault(0),
+                userSkills = runCatching {
+                    SkillStore.list(projectPath).count { it.scope == com.zhizhu.zhicode.compose.model.SkillScope.USER }
+                }.getOrDefault(0),
+                roleCardTotal = runCatching {
+                    RoleCardStore.list(getApplication()).size
+                }.getOrDefault(0),
+                loaded = true,
+            )
+            _state.update { state ->
+                val connected = state.mcpConfig?.status?.values?.count { it.connected } ?: 0
+                state.copy(extensions = summary.copy(mcpConnected = connected))
+            }
+        }
     }
 
     /**
@@ -6134,12 +6454,12 @@ class WorkspaceViewModel(
     }
 
     /** 把暂存的文件粘贴到当前目录；目标冲突逐项保留原文件并反馈。 */
-    fun pasteFilesIntoCurrentDirectory() {
+    fun pasteFilesIntoCurrentDirectory() = runBusy("files.paste") {
         val snapshot = _state.value
         val paths = snapshot.fileClipboard
-        if (paths.isEmpty()) return
+        if (paths.isEmpty()) return@runBusy
         val destination = File(snapshot.filePath)
-        viewModelScope.launch(Dispatchers.IO) {
+        run {
             val failures = mutableListOf<String>()
             val movedPaths = mutableSetOf<String>()
             var completed = 0

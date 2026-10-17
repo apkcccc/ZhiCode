@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.panes
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -41,13 +41,27 @@ import androidx.compose.ui.unit.sp
 import com.zhizhu.zhicode.TermuxTerminalPane
 import com.zhizhu.zhicode.compose.theme.ZhiRadius
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
+import com.zhizhu.zhicode.compose.ui.ZhiIndeterminateBar
+import com.zhizhu.zhicode.compose.ui.ZhiUsageBar
 import com.zhizhu.zhicode.compose.ui.chat.rememberAutoFollow
 import com.zhizhu.zhicode.compose.model.TerminalLine
 import com.zhizhu.zhicode.compose.model.TerminalTone
 import com.zhizhu.zhicode.compose.theme.ZhiColors
 import com.zhizhu.zhicode.compose.ui.ZhiHorizontalDivider
 import com.zhizhu.zhicode.compose.ui.ZhiMotion
+import com.zhizhu.zhicode.compose.ui.panes.PaneHeader
+import com.zhizhu.zhicode.compose.ui.panes.TerminalDrawer
+import com.zhizhu.zhicode.compose.ui.panes.TerminalExtraKeys
+import com.zhizhu.zhicode.compose.ui.panes.TerminalFailure
+import com.zhizhu.zhicode.compose.ui.panes.TerminalHeaderActions
+import com.zhizhu.zhicode.compose.ui.panes.TerminalQuickActionsDialog
+import com.zhizhu.zhicode.compose.ui.panes.TerminalRenameDialog
+import com.zhizhu.zhicode.compose.ui.panes.TerminalRuntimeNotice
+import com.zhizhu.zhicode.compose.ui.panes.rememberTerminalState
+import com.zhizhu.zhicode.compose.ui.panes.toast
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Surface
@@ -72,7 +86,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 渲染层复用现成 View 是更稳的选择。
  */
 @Composable
-fun TerminalPane(
+fun TerminalPage(
     lines: List<TerminalLine>,
     projectName: String,
     runtimeReady: Boolean,
@@ -82,6 +96,14 @@ fun TerminalPane(
     modifier: Modifier = Modifier,
     /** 清屏动作。默认 `null` = 不显示按钮。 */
     onClear: (() -> Unit)? = null,
+    /** 正在安装内置运行环境（与 `state.runtimeInstalling` 同源）。 */
+    installing: Boolean = false,
+    /** 安装进度 0~100；0 表示不显示确定进度。 */
+    progress: Int = 0,
+    /** 安装步骤文案或最后一次失败原因。 */
+    message: String = "",
+    /** 初始化运行环境。`null` 表示当前入口不可用（例如已有任务在跑）。 */
+    onInstall: (() -> Unit)? = null,
 ) {
     if (runtimeReady) {
         RealTerminalPane(
@@ -97,6 +119,10 @@ fun TerminalPane(
         projectName = projectName,
         modifier = modifier,
         onClear = onClear,
+        installing = installing,
+        progress = progress,
+        message = message,
+        onInstall = onInstall,
     )
 }
 
@@ -367,6 +393,10 @@ private fun TerminalPlaceholder(
     projectName: String,
     modifier: Modifier = Modifier,
     onClear: (() -> Unit)? = null,
+    installing: Boolean = false,
+    progress: Int = 0,
+    message: String = "",
+    onInstall: (() -> Unit)? = null,
 ) {
     val scheme = MiuixTheme.colorScheme
     val listState = rememberLazyListState()
@@ -442,6 +472,68 @@ private fun TerminalPlaceholder(
                 fontSize = MiuixTheme.textStyles.footnote1.fontSize,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 12.dp),
             )
+            // 「环境未就绪」以前只有一句话，没有任何可点的东西 —— 用户得自己
+            // 去设置里找到"安装运行环境"。这里直接把入口放在文案下面：
+            // 初始化期间显示进度并禁用按钮，失败就退回可再次点击的形态。
+            TerminalSetupAction(
+                installing = installing,
+                progress = progress,
+                message = message,
+                onInstall = onInstall,
+                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 12.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 占位态的「初始化运行环境」入口。
+ *
+ * 三态：未安装（按钮可点）/ 正在安装（进度 + 禁用）/ 失败（按钮可再点，附最后一次错误）。
+ * 失败时**不假装成功**：文案来自 ViewModel 的 `runtimeMessage`，它会说明卡在哪一步。
+ */
+@Composable
+private fun TerminalSetupAction(
+    installing: Boolean,
+    progress: Int,
+    message: String,
+    onInstall: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    if (onInstall == null) return
+    val scheme = MiuixTheme.colorScheme
+    Column(modifier = modifier) {
+        if (installing) {
+            if (progress in 1..99) {
+                ZhiUsageBar(
+                    fraction = progress / 100f,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                ZhiIndeterminateBar(modifier = Modifier.fillMaxWidth())
+            }
+            Text(
+                text = message.ifBlank { "正在解压并配置内置 Termux 环境…" },
+                color = scheme.onSurfaceVariantSummary,
+                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+        } else {
+            Button(
+                onClick = onInstall,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColorsPrimary(),
+            ) {
+                Text(text = "初始化运行环境", color = scheme.onPrimary)
+            }
+            if (message.isNotBlank()) {
+                Text(
+                    text = message,
+                    color = scheme.error,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                )
+            }
         }
     }
 }

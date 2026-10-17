@@ -59,6 +59,8 @@ MAIN_KT_SOURCES=(
     app/src/main/java/com/zhizhu/zhicode/compose/model/ChatKind.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/ToolGrouping.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/TurnLayout.kt
+    app/src/main/java/com/zhizhu/zhicode/compose/model/ActionBusy.kt
+    app/src/main/java/com/zhizhu/zhicode/compose/model/McpDraft.kt
 )
 
 # 需要编译并运行的测试类（相对 app/src/test/java、点号包名）。
@@ -80,6 +82,8 @@ DEFAULT_TESTS=(
     com.zhizhu.zhicode.compose.model.FileRangeSelectionTest
     com.zhizhu.zhicode.compose.model.ToolGroupingTest
     com.zhizhu.zhicode.compose.model.TurnLayoutTest
+    com.zhizhu.zhicode.compose.model.ActionBusyTest
+    com.zhizhu.zhicode.compose.model.McpFormLogicTest
 )
 
 # 哪些目标是 Kotlin。

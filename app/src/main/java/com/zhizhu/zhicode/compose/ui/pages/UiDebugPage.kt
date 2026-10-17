@@ -1,6 +1,6 @@
 @file:OptIn(top.yukonga.miuix.kmp.interfaces.ExperimentalScrollBarApi::class)
 
-package com.zhizhu.zhicode.compose.ui.debug
+package com.zhizhu.zhicode.compose.ui.pages
 
 import android.widget.Toast
 import androidx.compose.foundation.background

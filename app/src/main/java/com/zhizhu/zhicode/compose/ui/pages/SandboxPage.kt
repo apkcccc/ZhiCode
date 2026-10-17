@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.sandbox
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -144,7 +144,7 @@ sealed interface SandboxDialog {
  * 参数全是回调，没有一个是「直接调后端」的 —— 见文件头的说明。
  */
 @Composable
-fun ZhiSandboxScreen(
+fun SandboxPage(
     state: SandboxBoardUiState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
@@ -287,7 +287,11 @@ fun ZhiSandboxScreen(
                 // （三个 key 互不相同，所以旧分支一定是"消失"而不是"复用成新内容"。）
                 if (state.errorDetail != null) {
                     item(key = "sandboxError") {
-                        ErrorDetail(state.errorDetail, modifier = Modifier.animateItem())
+                        ErrorDetail(
+                            detail = state.errorDetail,
+                            onRetry = onRefresh,
+                            modifier = Modifier.animateItem(),
+                        )
                     }
                 } else if (state.packages.isEmpty()) {
                     item(key = "sandboxEmpty") {
@@ -401,16 +405,32 @@ private fun StatusLine(status: String, tone: SandboxStatusTone) {
  * `SelectionContainer` 保留：后端错误常常需要整段复制去搜。
  */
 @Composable
-private fun ErrorDetail(detail: String, modifier: Modifier = Modifier) {
+private fun ErrorDetail(
+    detail: String,
+    onRetry: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     // `animateItem()`（由调用方传进来）必须落在**这一项的根节点**上。
-    // 这里的根是 SelectionContainer（不是里面那个 ZhiNoticeBar）——
-    // 挂在里层的话动画动的是 bar 在 SelectionContainer 里的位置，而那个位置从来不变。
-    SelectionContainer(modifier = modifier) {
-        ZhiNoticeBar(
-            text = detail,
-            tone = ZhiNoticeTone.ERROR,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    // 这里的根是 Column（不是里面那个 ZhiNoticeBar）——
+    // 挂在里层的话动画动的是 bar 在容器里的位置，而那个位置从来不变。
+    Column(modifier = modifier.fillMaxWidth()) {
+        SelectionContainer {
+            ZhiNoticeBar(
+                text = detail,
+                tone = ZhiNoticeTone.ERROR,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        // 后端没起来时，界面上的开关与列表都不可用。原先唯一的出路是**离开这一页
+        // 再回来**（onResume 才会 reload）。这里给一个就地重试：失败原因看上面那段，
+        // 修好之后点它，不必退出。
+        if (onRetry != null) {
+            TextButton(
+                text = "重试连接",
+                onClick = onRetry,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
 }
 

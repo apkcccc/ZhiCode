@@ -48,7 +48,8 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 ## 2. 明确未做 / 已知限制
 
 - **没有悬浮球、也没有 Frida / Debug 的图形面板** —— 调试走内置命令 `zhisandbox` / `zhidebug` 与 Agent 的 Debug 工具。
-- **没有原版 IQ Code 的三套自定义调色板** —— 界面统一走 Miuix 原生主题，跟随系统深浅色。
+- **没有原版 IQ Code 的三套自定义调色板** —— 界面统一走 Miuix 原生主题，跟随系统深浅色；
+  本工程自己的语义色在 `theme/` 的 `ZhiColors` 里（成功/失败/警示与层级色）。
 - **不做 iOS / 桌面端**。
 - **`targetSdk 28`**：这让应用保留旧版存储与后台行为的语义（`requestLegacyExternalStorage`、`usesCleartextTraffic` 等）。
   这是一处**刻意的取舍**，不是遗漏；升级 `targetSdk` 会连带改变存储、前台服务与明文流量行为，需要单独评估。
@@ -208,15 +209,23 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 │   │ │   ├── FileTree.kt ZhiFileProvider.java ZhiDocumentsProvider.kt # 文件树 / 分享 / SAF
 │   │ │   ├── UiCanvasController.java UiCanvasStore.java # UI canvas 覆盖层
 │   │ │   ├── compose/ # Compose 界面层
-│   │ │   │ ├── theme/ # 颜色 / 圆角 / 间距 / 动效 / 字阶 token（改视觉先看这里）
-│   │ │   │ ├── model/ # UiModels（含 WorkspaceUiState）、ToolKind、TurnLayout、ToolGrouping
+│   │ │   │ ├── theme/ # 圆角 / 间距 / 动效 / 字阶 token + 主题入口（颜色全部来自 Miuix）
+│   │ │   │ ├── model/ # UiModels（含 WorkspaceUiState）、ActionBusy、ToolKind、TurnLayout、ToolGrouping
 │   │ │   │ ├── data/ # API 配置、模型目录、MCP、技能、角色卡、记忆、搜索服务、会话读取
 │   │ │   │ ├── state/ # WorkspaceViewModel（StateFlow<WorkspaceUiState> + 引擎事件）
 │   │ │   │ ├── engine/ # ZhiEngineController（引擎接线与流式合并）、ToolText
 │   │ │   │ ├── runtime/ # EnvDoctor（环境自检）
 │   │ │   │ ├── editor/ # EditorActivity 等 —— 独立进程 :editor
-│   │ │   │ └── ui/ # 界面全部：Common.kt（Miuix 唯一转发层）、AppScaffold、
-│   │ │   │          chat/ composer/ panes/ dialogs/ settings/ sandbox/ debug/
+│   │ │   │ └── ui/ # 界面全部
+│   │ │   │     ├── pages/ # **一个页面一个文件**：WorkspacePage / ChatPage / TerminalPage /
+│   │ │   │     │          FilesPage / EditorPage / SettingsPage / ApiConfigPage / McpConfigPage /
+│   │ │   │     │          SearchServicesPage / SkillsPage / RoleCardsPage / MemoryPage /
+│   │ │   │     │          SandboxPage / UiDebugPage
+│   │ │   │     ├── pages/overlays/ # 浮层：权限 / 计划审批 / 选择器 / 任务清单 / 模型 / 附件 / 环境 / 调试浮层
+│   │ │   │     ├── Common.kt # Miuix 唯一转发层（Zhi* 包装）
+│   │ │   │     ├── PageFeedback.kt # 非对话页的操作反馈条（含页面级数据源）
+│   │ │   │     ├── AppScaffold.kt # 主题 + 导航栈 + 页面路由（不再放页面内容）
+│   │ │   │     └── chat/ composer/ panes/ dialogs/ settings/ debug/ # 共享组件与外框
 │   │ │   ├── sandbox/ # 沙箱宿主层（16 个类：引擎门面 / RPC / guest 桥 / Frida / 调试 / 保活）
 │   │ │   └── background/ # 前台保活
 │   │ ├── assets/ # bootstrap-aarch64.zip、zhicode/*.sh（6 个前缀改写钩子）、sora/textmate/
@@ -263,8 +272,13 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 | 内存诊断日志（release 也打） | `.../storage/ZhiMemory.java`，tag `ZhiCodeMem` |
 | 项目目录键（计划 / 任务用） | `.../zhicode/storage/ProjectPaths.java` |
 | 内置 shell 怎么执行命令 | `.../zhicode/termux/TermuxShellExecutor.java` |
-| 界面 token（颜色 / 圆角 / 字阶） | `com/zhizhu/zhicode/compose/theme/` |
-| 某个界面组件 | `compose/ui/<区域>/`；先确认 `Common.kt` 里有没有现成的 `Zhi*` 包装 |
+| 界面 token（圆角 / 间距 / 动效 / 字阶） | `com/zhizhu/zhicode/compose/theme/`（**颜色不在这里**） |
+| 某个页面 | `compose/ui/pages/<XxxPage>.kt` —— 一个页面一个文件，文件名即入口名 |
+| 某个浮层 | `compose/ui/pages/overlays/<Xxx>Overlay.kt` |
+| 某个界面组件（共享） | `compose/ui/<区域>/`；先确认 `Common.kt` 里有没有现成的 `Zhi*` 包装 |
+| 颜色 | `MiuixTheme.colorScheme` + `theme/ZhiColors` 的语义色（两套都随深浅切换） |
+| 页面操作反馈为什么看不见 | `compose/ui/PageFeedback.kt`（非对话页 / 整页的反馈条） |
+| 双击按钮会不会做两遍 | `compose/model/ActionBusy.kt` + `WorkspaceViewModel.runBusy` |
 | 界面状态与事件流 | `compose/state/WorkspaceViewModel.kt` |
 | 沙箱进程模型与不变式 | `com/zhizhu/zhicode/sandbox/` + [`docs/sandbox-host.md`](docs/sandbox-host.md) |
 | R8 keep 规则 | `app/proguard-rules.pro`、`Bcore/consumer-rules.pro` |
@@ -280,7 +294,11 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 ## 7. 界面层约定（要点）
 
 - **Miuix 组件只在 `compose/ui/Common.kt` 里转发**：调用点用 `Zhi*` 包装，不直接引库，库升级只影响一个文件。
-- **尺寸 / 颜色 / 字阶取既有 token 或 Miuix 主题**，不要在调用点写新的裸数字与裸字号。
+- **颜色走 `MiuixTheme.colorScheme` / `ZhiColors`，不要在调用点写死色值**：层级色与语义色都有现成 token，
+  深浅两套由主题决定。
+- **一个页面一个文件**：整页放 `ui/pages/<XxxPage>.kt`，浮层放 `ui/pages/overlays/`；`AppScaffold.kt` 只留主题、导航栈与路由。
+- **尺寸 / 字阶取既有 token 或 Miuix 主题**，不要在调用点写新的裸数字与裸字号。
+- **会落盘的动作走 `ViewModel.runBusy(...)`**：同一动作在飞时第二次点击被静默丢弃，界面用 `state.isBusy(key)` 禁用按钮。
 - 输入框一律走 `ZhiTextField`，长按菜单一律走 `ZhiAnchoredActionMenu` —— 两处都有明确的失败模式（前者会丢文字色与光标位置，后者在观察器消费事件时会把点击与无障碍语义顶掉），改之前先看 [`docs/ui-miuix.md`](docs/ui-miuix.md) 第 6 节。
 
 > **约定没有自动化守卫。** 上面这些约束写错了**不会编译失败**，而仓库里已经不再有源码文本级断言（见第 4 节），

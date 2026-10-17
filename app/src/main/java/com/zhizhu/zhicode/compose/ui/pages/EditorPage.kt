@@ -10,7 +10,7 @@
  * This file keeps the ZL2 editor state/layout while using this project's
  * Miuix components and EditorViewModel adapters.
  */
-package com.zhizhu.zhicode.compose.ui.panes
+package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -56,6 +56,8 @@ import com.zhizhu.zhicode.compose.ui.dialogs.DialogWideOutsideMargin
 import com.zhizhu.zhicode.compose.ui.dialogs.PrimaryButton
 import com.zhizhu.zhicode.compose.ui.dialogs.SecondaryButton
 import com.zhizhu.zhicode.compose.ui.dialogs.ZhiDialogWidth
+import com.zhizhu.zhicode.compose.ui.panes.SoraEditor
+import com.zhizhu.zhicode.compose.ui.panes.SoraEditorHost
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.EditorSearcher
@@ -82,7 +84,7 @@ private const val EDITOR_PREFS = "zl2_editor"
 
 /** ZL2 式编辑器，但控件全部接入本项目 Miuix 组件。 */
 @Composable
-internal fun FileEditorScreen(viewModel: EditorViewModel, onExit: () -> Unit) {
+internal fun EditorPage(viewModel: EditorViewModel, onExit: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val dark = LocalZhiDark.current

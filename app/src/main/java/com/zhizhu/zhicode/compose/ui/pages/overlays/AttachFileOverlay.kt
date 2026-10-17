@@ -1,4 +1,4 @@
-package com.zhizhu.zhicode.compose.ui.dialogs
+package com.zhizhu.zhicode.compose.ui.pages.overlays
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +29,7 @@ import com.zhizhu.zhicode.compose.theme.ZhiSpace
 import com.zhizhu.zhicode.compose.ui.panes.FileListRow
 import com.zhizhu.zhicode.compose.ui.panes.FilePathBar
 import com.zhizhu.zhicode.compose.ui.panes.FileRootSwitcher
+import com.zhizhu.zhicode.compose.ui.dialogs.DialogShell
 import com.zhizhu.zhicode.compose.ui.settings.rememberLastNonNull
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.Text

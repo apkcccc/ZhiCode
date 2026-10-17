@@ -32,8 +32,13 @@ import top.yukonga.miuix.kmp.overlay.OverlayDialog
 /**
  * 所有 Miuix [OverlayDialog] 共用的外壳、按钮与紧凑文字样式。
  *
- * 抽到单独文件是因为设置页（`ui/settings/SettingsDialog.kt`）也要用同一套外壳；
- * 放在 `Dialogs.kt` 里会因为 `private` 而无法复用，而重复一份必然走样。
+ * 所有模态窗口（权限、计划审批、选择器、任务清单、模型、附件、环境自检）都走
+ * `miuix` 的 `overlay` 包，**不用** `window` 包的 `WindowDialog`：后者会创建独立
+ * Android Window，既继承不到 `Scaffold` 的 `popupHost`，也无法参与主窗口的
+ * `LayerBackdrop` 背景采样，弹窗背后的模糊会做不出来。
+ *
+ * 抽到单独文件是因为设置页（`ui/pages/SettingsPage.kt`）也要用同一套外壳；
+ * 放在具体页面文件里会因为 `private` 而无法复用，而重复一份必然走样。
  *
  * 这些常量和函数是 `internal` 而非 `private`：只在本 module 内共享，
  * 不对外暴露。
