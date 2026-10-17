@@ -8,6 +8,7 @@ import com.zhizhu.zhicode.compose.ui.pages.McpConfigPage
 import com.zhizhu.zhicode.compose.ui.pages.SearchServicesPage
 import com.zhizhu.zhicode.compose.ui.pages.MemoryPage
 import com.zhizhu.zhicode.compose.ui.pages.PromptsPage
+import com.zhizhu.zhicode.compose.ui.pages.ThemePage
 import com.zhizhu.zhicode.compose.ui.pages.RoleCardsPage
 import com.zhizhu.zhicode.compose.ui.pages.SkillsPage
 import com.zhizhu.zhicode.compose.ui.pages.SettingsPage
@@ -86,7 +87,7 @@ fun ZhiCodeApp(viewModel: WorkspaceViewModel = rememberWorkspaceViewModel()) {
     val isDark = ZhiThemeMode.rememberCurrentDark(state.themeMode)
     // 主题栈只有一处（theme/ZhiAppTheme.kt）：编辑器那个独立 Activity 用的是同一个，
     // 所以"应用内切主题后两屏颜色不一致"这类问题不会再出现。
-    ZhiAppTheme(mode = state.themeMode) {
+    ZhiAppTheme(theme = state.themeSettings) {
         // 这里**不再**挂常开的帧泵。
         //
         // 原来这里是 `ZhiFrameTraceHost()`，内部是
@@ -251,6 +252,7 @@ private fun ZhiCodeScreen(
                 state.roleCards != null -> add(SettingsKey.RoleCards)
                 state.memory != null -> add(SettingsKey.Memory)
                 state.promptsOpen -> add(SettingsKey.Prompts)
+                state.themePageOpen -> add(SettingsKey.Theme)
             }
         }
     }
@@ -284,9 +286,17 @@ private fun ZhiCodeScreen(
     }
     // 滑动关闭是 **opt-in**（Miuix 默认全关）。方向是**物理方向**、不随布局方向镜像，
     // 所以按当前布局方向在 LTR / RTL 之间选 —— 与官方 example 同一段逻辑。
-    val swipeBack = when (LocalLayoutDirection.current) {
-        LayoutDirection.Rtl -> NavSwipeDirection.RightToLeft
-        else -> NavSwipeDirection.LeftToRight
+    //
+    // 用户可以在「主题设置 → 显示 → 边缘滑动返回」里关掉它。关掉时传 `null`：
+    // `entry(swipeDismiss = null)` 让 Miuix **不挂**那一层手势识别器，
+    // 而不是"挂上但不认领" —— 后者仍会参与命中测试，在输入框边缘滑动时会抢事件。
+    val swipeBack: NavSwipeDirection? = if (state.themeSettings.edgeSwipeBack) {
+        when (LocalLayoutDirection.current) {
+            LayoutDirection.Rtl -> NavSwipeDirection.RightToLeft
+            else -> NavSwipeDirection.LeftToRight
+        }
+    } else {
+        null
     }
 
     // 整页（设置 / 二级页 / UI 调试）底部的反馈条数据源。
@@ -451,6 +461,13 @@ private fun ZhiCodeScreen(
                 onCancelEdit = viewModel::cancelMemoryEdit,
             )
         }
+        entry<SettingsKey.Theme>(swipeDismiss = swipeBack) {
+            ThemePage(
+                theme = state.themeSettings,
+                onDismiss = viewModel::closeThemePage,
+                onChange = viewModel::updateThemeSettings,
+            )
+        }
         entry<SettingsKey.Prompts>(swipeDismiss = swipeBack) {
             PromptsPage(
                 initPrompt = state.settings.initPrompt,
@@ -506,4 +523,5 @@ private sealed interface SettingsKey : NavKey {
     data object RoleCards : SettingsKey
     data object Memory : SettingsKey
     data object Prompts : SettingsKey
+    data object Theme : SettingsKey
 }

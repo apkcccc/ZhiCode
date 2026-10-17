@@ -1139,6 +1139,10 @@ data class SettingsDraft(
      */
     fun applyTo(state: WorkspaceUiState, keepDraft: Boolean = false): WorkspaceUiState = state.copy(
         themeMode = themeMode,
+        // 深浅是 `themeSettings.mode` 的缓存值（见 WorkspaceUiState.themeSettings 的说明），
+        // 所以写它的时候必须把真源一起写 —— 否则会出现"设置页显示浅色、
+        // 主题栈还在用深色"，而那要下一次重启才能对齐。
+        themeSettings = state.themeSettings.copy(mode = themeMode),
         permissionMode = permissionMode,
         effort = effort,
         contextWindow = contextWindow,

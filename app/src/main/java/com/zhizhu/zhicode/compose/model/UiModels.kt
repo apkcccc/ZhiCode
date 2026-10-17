@@ -676,6 +676,21 @@ data class WorkspaceUiState(
     val permissionMode: PermissionMode = PermissionMode.ASK,
     val effort: EffortLevel = EffortLevel.AUTO,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /**
+     * 主题与显示设置（预设、Monet 种子色、AMOLED、四个显示开关、界面缩放）。
+     *
+     * ## 为什么会与 [themeMode] 同时存在
+     *
+     * [themeMode] 是"深浅三态"，被设置页、顶栏循环按钮、编辑器 Activity 等十几处直接读，
+     * 所以它的形状不能动。而 [themeSettings] 是这一轮新增的**整份**主题状态。
+     *
+     * 两者的关系是**单向**的：`themeSettings.mode` 是唯一的真源，
+     * [themeMode] 是它的缓存值 —— 所有会改动深浅的地方（`cycleThemeMode`、
+     * `SettingsDraft.applyTo`、启动时的恢复）都必须**同时**写这两个字段。
+     * 反过来（读 `themeMode` 去推 `themeSettings`）没有意义，那是多一层派生。
+     */
+    val themeSettings: com.zhizhu.zhicode.compose.data.ThemeSettings =
+        com.zhizhu.zhicode.compose.data.ThemeSettings(),
     val profileName: String = "未配置",
     /** 当前 API 配置是否已有密钥。顶栏据此提示"还不能用"，避免发出去才发现报错。 */
     val apiKeyConfigured: Boolean = false,
@@ -822,6 +837,13 @@ data class WorkspaceUiState(
      * 再包一层状态对象，只会多一份要与 settings 同步的副本。
      */
     val promptsOpen: Boolean = false,
+    /**
+     * 主题设置整页是否打开。
+     *
+     * <p>与 [promptsOpen] 同理：这一页要的东西全在 [themeSettings] 里，
+     * 没有要读盘或异步加载的载荷，所以一个布尔就够。
+     */
+    val themePageOpen: Boolean = false,
     val modelPicker: com.zhizhu.zhicode.compose.model.ModelPickerState? = null,
     /**
      * 非空即「UI 调试」整页打开（**仅 debug 构建**有入口，见设置页的「扩展」组）。

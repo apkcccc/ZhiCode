@@ -19,6 +19,7 @@ import com.zhizhu.zhicode.compose.data.McpStore
 import com.zhizhu.zhicode.compose.data.MockWorkspaceRepository
 import com.zhizhu.zhicode.compose.data.ModelCatalogStore
 import com.zhizhu.zhicode.compose.data.SessionReader
+import com.zhizhu.zhicode.compose.data.ThemeStore
 import com.zhizhu.zhicode.compose.data.RoleCardStore
 import com.zhizhu.zhicode.compose.data.MemoryStore
 import com.zhizhu.zhicode.compose.data.SkillImport
@@ -598,6 +599,11 @@ class WorkspaceViewModel(
         _state.update {
             it.copy(
                 themeMode = theme,
+                // 整份主题设置也在这里读回来：预设 / Monet / 显示开关与深浅住在同一个存储里，
+                // 分两次读会出现「深浅换了、预设没换」的中间态。
+                themeSettings = runCatching { ThemeStore.read(getApplication()) }
+                    .getOrDefault(it.themeSettings)
+                    .let { stored -> stored.copy(mode = theme) },
                 settings = it.settings.copy(
                     webSearchKeys = keys,
                     terminalCharMode = runCatching {
@@ -1844,6 +1850,18 @@ class WorkspaceViewModel(
 
     fun closePrompts() {
         _state.update { it.copy(promptsOpen = false) }
+    }
+
+    /** 打开主题设置整页（设置 hub 里那一行现在只做入口）。 */
+    fun openThemePage() {
+        _state.update { it.copy(settingsOpen = true, sidebarOpen = false, themePageOpen = true) }
+    }
+
+    fun closeThemePage() {
+        // 关页时兑现主题设置的落盘：滑杆拖动会连续改状态但不写盘
+        // （见 updateThemeSettings 的说明），这里补那一次。
+        persistThemeSettings()
+        _state.update { it.copy(themePageOpen = false) }
     }
 
     fun removeAttachment(id: String) {
@@ -5636,9 +5654,38 @@ class WorkspaceViewModel(
                 ThemeMode.LIGHT -> ThemeMode.DARK
                 ThemeMode.DARK -> ThemeMode.SYSTEM
             }
-            it.copy(themeMode = next, message = "主题：${next.label}")
+            // 两个字段一起写：`themeSettings` 是真源，`themeMode` 是它的缓存
+            // （见 WorkspaceUiState.themeSettings 的说明）。
+            it.copy(
+                themeMode = next,
+                themeSettings = it.themeSettings.copy(mode = next),
+                message = "主题：${next.label}",
+            )
         }
         persistTheme(next)
+    }
+
+    /**
+     * 改主题设置。
+     *
+     * 只置状态、不立刻落盘：调用方是设置页里的滑杆与开关，拖动一次会触发几十次
+     * 回调，每次都 `commit()` 会把主线程按住。落盘由 [persistThemeSettings] 负责，
+     * 页面关闭时（[flushSettings]）兑现。
+     */
+    fun updateThemeSettings(transform: (com.zhizhu.zhicode.compose.data.ThemeSettings) ->
+        com.zhizhu.zhicode.compose.data.ThemeSettings) {
+        _state.update { s ->
+            val next = transform(s.themeSettings)
+            s.copy(themeMode = next.mode, themeSettings = next)
+        }
+    }
+
+    /** 立刻把主题设置写盘（切主题、关设置页时用）。 */
+    fun persistThemeSettings() {
+        val settings = _state.value.themeSettings
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ThemeStore.write(getApplication(), settings) }
+        }
     }
 
     // ---------- 内置 Termux 运行环境 ----------
@@ -6088,6 +6135,9 @@ class WorkspaceViewModel(
             // 主题与搜索密钥**不在** SessionConfig 里，configure() 那次落盘罩不到它们，
             // 各自补一次（密钥走加密槽，见 ApiSettingsStore.setWebSearchKey）。
             persistTheme(draft.themeMode)
+            // 主题设置是**另一份**存储（预设 / Monet / 显示开关），一起兑现，
+            // 否则「改了预设就大退」会丢掉这一批改动。
+            persistThemeSettings()
             persistWebSearchKey(draft)
             // 终端输入类型也不在 SessionConfig 里（终端是独立 Activity，不读会话配置）。
             runCatching {
@@ -6104,6 +6154,10 @@ class WorkspaceViewModel(
      */
     private fun persistTheme(mode: ThemeMode) {
         runCatching { ApiSettingsStore.setThemeMode(getApplication(), mode.name.lowercase()) }
+        // 同一份语义住在两处存储里：`theme_mode` 是深浅三态（老键，编辑器 Activity
+        // 与 ZhiThemeMode 都读它），`ThemeStore` 是这一轮新增的整份设置。
+        // 只写一处就会出现「顶栏循环按钮换了深浅、预设页显示的还是旧值」。
+        persistThemeSettings()
     }
 
     /** 持久化**当前选中服务**的密钥（界面只可能改这一个）。 */
@@ -6133,6 +6187,7 @@ class WorkspaceViewModel(
             "roleCards" -> openRoleCards()
             "memory" -> openMemory()
             "prompts" -> openPrompts()
+            "theme" -> openThemePage()
             "uiDebug" -> openUiDebug()
             else -> Unit
         }

@@ -209,18 +209,27 @@ private fun themeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.DARK -> "夜间模式"
 }
 
-/** 通用组：主题模式 + 联网搜索（rikkahub 的 generalSettings / search 合并）。 */
+/**
+ * 通用组：主题入口 + 联网搜索（rikkahub 的 generalSettings / search 合并）。
+ *
+ * ## 主题为什么从「三选一行」改成「入口行」
+ *
+ * 深浅只是主题的一个维度。这一轮起主题还有预设色、Monet 种子色、调色板风格、
+ * AMOLED 与四个显示开关 —— 它们**必须**在同一页里（改一个就得看另一个的效果），
+ * 而 hub 这一层塞不下那么多控件，也不该塞：主题是"改一次就不再动"的东西。
+ *
+ * 所以这里只留一行当前值和入口，形态与「API 配置」「搜索服务」一致。
+ */
 @Composable
 private fun GeneralPage(
     draft: SettingsDraft,
     onChange: (SettingsDraft) -> Unit,
     onNavigate: (String) -> Unit,
 ) {
-    SettingsChoice(
-        title = "主题模式",
-        options = ThemeMode.entries.map(::themeLabel),
-        selectedIndex = ThemeMode.entries.indexOf(draft.themeMode),
-        onSelect = { onChange(draft.copy(themeMode = ThemeMode.entries[it])) },
+    SettingsEntry(
+        title = "主题设置",
+        valueText = "深浅 · ${draft.themeMode.label} · 预设色 / 模糊 / 缩放",
+        onClick = { onNavigate("theme") },
         // 与顶栏那个明暗按钮同一个字形（半明半暗的圆）。
         icon = ZhiIcons.theme,
         plate = SettingsPlateColors.orange,

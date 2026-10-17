@@ -19,6 +19,20 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
 val LocalZhiDark = compositionLocalOf { false }
 
 /**
+ * 是否启用 AMOLED 纯黑（只有深色模式下有意义）。
+ *
+ * ## 为什么单独一个 CompositionLocal
+ *
+ * 它与 [LocalZhiDark] 是**两个独立信号**：深浅决定"用哪一支色阶"，
+ * 纯黑决定"这一支里最深的那两档要不要压到 #000000"。合成一个的话，
+ * 关掉 AMOLED 会让所有读深浅的地方一起重组 —— 而那些地方绝大多数并不关心纯黑。
+ *
+ * 提供一个带默认值的 Local，而不是把参数一路传下去：层级色是**函数**（`ZhiColors.backdrop()`），
+ * 给每个调用点加参数等于要改 200 多处。
+ */
+val LocalAmoled = compositionLocalOf { false }
+
+/**
  * 全局统一圆角。
  *
  * 之前每个文件各自写 `RoundedCornerShape(7.dp/8.dp/9.dp/11.dp/13.dp/16.dp…)`，
@@ -164,11 +178,21 @@ object ZhiColors {
      * 背板只负责托住工作区，不与内容卡片争夺注意力。
      */
     @Composable
-    fun backdrop(): Color = if (isDark()) DarkBackdrop else PanelLight
+    fun backdrop(): Color = when {
+        // AMOLED：背板就是纯黑。OLED 屏上这一档的功耗差别是实打实的，
+        // 而它只在深色下生效 —— 浅色下压成黑等于整屏不可读。
+        isDark() && LocalAmoled.current -> Color.Black
+        isDark() -> DarkBackdrop
+        else -> PanelLight
+    }
 
-    /** 侧栏 / 面板底色：深色柔黑、浅色柔白。 */
+    /** 侧栏 / 面板底色：深色柔黑、浅色柔白。AMOLED 下与背板同为纯黑。 */
     @Composable
-    fun panelSurface(): Color = if (isDark()) PanelDark else Color.White
+    fun panelSurface(): Color = when {
+        isDark() && LocalAmoled.current -> Color.Black
+        isDark() -> PanelDark
+        else -> Color.White
+    }
 
     /**
      * 面板里的卡片底。
@@ -177,7 +201,13 @@ object ZhiColors {
      * 浅色：比纯白面板**暗**一档（`#FAFAFC`）。
      */
     @Composable
-    fun cardSurface(): Color = if (isDark()) DarkCard else CardLight
+    fun cardSurface(): Color = when {
+        // 纯黑主题里卡片不能也压成 0：那样分组边界彻底消失（卡片与背板同色）。
+        // 留一档几乎看不出但测得出的 0xFF0E0E0E，边界靠圆角与阴影仍在。
+        isDark() && LocalAmoled.current -> AmoledCard
+        isDark() -> DarkCard
+        else -> CardLight
+    }
 
     /** 卡片内部再嵌一层的小块（代码块、diff 块、详情框）。 */
     @Composable
@@ -214,6 +244,9 @@ object ZhiColors {
     private val DarkBackdrop = Color(0xFF28282A)
     private val PanelDark = Color(0xFF1C1C1E)
     private val DarkCard = Color(0xFF323235)
+
+    /** AMOLED 下的卡片底：比纯黑亮一丝，让分组边界还能被看见。 */
+    private val AmoledCard = Color(0xFF0E0E0E)
 
     /**
      * 浅色中性阶。

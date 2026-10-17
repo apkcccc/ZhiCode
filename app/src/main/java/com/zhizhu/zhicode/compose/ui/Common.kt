@@ -1,4 +1,6 @@
 package com.zhizhu.zhicode.compose.ui
+
+import com.zhizhu.zhicode.compose.theme.LocalThemeSettings
 import com.zhizhu.zhicode.compose.theme.ZhiColors
 import com.zhizhu.zhicode.compose.theme.ZhiRadius
 import com.zhizhu.zhicode.compose.theme.ZhiSpace
@@ -143,29 +145,33 @@ internal fun FloatingBottomShell(
     content: @Composable () -> Unit,
 ) {
     val scheme = MiuixTheme.colorScheme
+    // 「悬浮底栏」开关：关闭时贴满宽度、去圆角与阴影 —— 回到传统底部栏的观感。
+    // 它不是样式偏好而是**可读性**选择：屏幕小时悬浮内缩会吃掉两侧各 12dp，
+    // 而长命令恰好最需要横向空间。
+    val floating = LocalThemeSettings.current.floatingBar
+    val shape = RoundedCornerShape(if (floating) ZhiRadius.floating else 0.dp)
+    val inset = if (floating) floatingHorizontalInset(wide) else 0.dp
     FloatingToolbar(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = verticalPadding)
             // 横向内缩在**布局层**，卡片贴住布局框 —— 与之前发送栏一致。
-            .padding(horizontal = floatingHorizontalInset(wide))
-            .then(glass.blur(Modifier, RoundedCornerShape(ZhiRadius.floating), radius = 24f))
+            .padding(horizontal = inset)
+            .then(if (floating) glass.blur(Modifier, shape, radius = 24f) else Modifier)
             // 玻璃边缘的高光 + 阴影共同给出悬浮层与背景的距离；浅色不能只靠
             // 白色底，因为那会回到"一块平白卡片"，也正是 blur 看不见的原因。
-            .border(
-                width = 1.dp,
-                color = if (ZhiColors.isDark()) {
-                    Color.White.copy(alpha = 0.10f)
+            .then(
+                if (floating) {
+                    Modifier.border(width = 1.dp, color = glass.edgeHighlight(), shape = shape)
                 } else {
-                    Color.White.copy(alpha = 0.62f)
+                    Modifier
                 },
-                shape = RoundedCornerShape(ZhiRadius.floating),
             ),
         color = glass.surfaceColor(if (ZhiColors.isDark()) scheme.surfaceContainer else ZhiColors.panelSurface()),
-        cornerRadius = ZhiRadius.floating,
+        cornerRadius = if (floating) ZhiRadius.floating else 0.dp,
         outSidePadding = PaddingValues(0.dp),
-        shadowElevation = 12.dp,
-        showDivider = false,
+        shadowElevation = if (floating) 12.dp else 0.dp,
+        showDivider = !floating,
         content = content,
     )
 }
