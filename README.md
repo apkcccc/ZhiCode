@@ -34,6 +34,9 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 | 编辑器 | 独立 `EditorActivity`（独立进程 `:editor`）+ Rosemoe Sora Editor + TextMate 语法高亮 |
 | 权限门控 | `PermissionGate` / `PermissionModePolicy` / `RiskClassifier`，模式可在设置页与输入器页脚切换（见 [`SECURITY.md`](SECURITY.md)） |
 | shell 身份 | `com/zhizhu/zhicode/shizuku/` + `tools/ShizukuBashTool`：经 [Shizuku](https://github.com/RikkaApps/Shizuku) 以 uid 2000 跑 `pm/am/settings/dumpsys/input` 这类系统命令，**不需要设备 root**；开关默认关闭，命令执行前校验真实 uid |
+| 主题设置 | `compose/data/ThemeStore.kt`（形状 + 落盘）+ `compose/theme/ZhiThemeSpec.kt`（预设表，纯逻辑）+ `compose/theme/ZhiAppTheme.kt`（唯一主题入口）。预设色 / Monet 种子色 / AMOLED / 界面缩放 / 四个显示开关，全部立刻生效（见第 7 节） |
+| 提示词槽位 | `compose/model/PromptSlots.kt`：`/init` 指令、压缩摘要系统提示与开场段三处可改，**主系统提示不开放编辑**（那是行为契约） |
+| 关于 / 许可 | `ui/pages/AboutPage.kt`、`ThirdPartyLicensesPage.kt` + `compose/model/Licenses.kt`（12 条清单，与根 `NOTICE` 逐条对齐）；入口在侧栏与设置页 |
 
 顶层模块：
 
@@ -51,8 +54,11 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 - **没有悬浮球、也没有 Frida / Debug 的图形面板** —— 调试走内置命令 `zhisandbox` / `zhidebug` 与 Agent 的 Debug 工具。
 - **Shizuku 要先自己装、自己启动**：本工程只做授权与调用，不打包 Shizuku 管理端，也不能替你启动它的服务。
   没装或服务没起来时，`/shizuku status` 与设置里的那一行会如实说明卡在哪一步，工具本身不会假装成功。
-- **没有原版 IQ Code 的三套自定义调色板** —— 界面统一走 Miuix 原生主题，跟随系统深浅色；
-  本工程自己的语义色在 `theme/` 的 `ZhiColors` 里（成功/失败/警示与层级色）。
+- **没有原版 IQ Code 的三套自定义调色板** —— 界面统一走 Miuix 原生主题。取代它的是更细的一层：
+  7 个预设种子色 + 可选的自定义种子色，Monet 开关决定「只有强调色跟种子色」还是「整套色板都由
+  HCT 生成」（见第 7 节）。**没有**「新建 / 导入 / 导出主题」这类主题包管理 —— 预设表编译进 APK。
+- **没有预测性返回手势的开关**：Miuix `NavDisplay` 把 predictive back 做成内置能力且没有关闭 API，
+  做成开关就是点了没用的假开关。可关的是「边缘滑动返回」。
 - **不做 iOS / 桌面端**。
 - **`targetSdk 28`**：这让应用保留旧版存储与后台行为的语义（`requestLegacyExternalStorage`、`usesCleartextTraffic` 等）。
   这是一处**刻意的取舍**，不是遗漏；升级 `targetSdk` 会连带改变存储、前台服务与明文流量行为，需要单独评估。
@@ -142,8 +148,10 @@ bash test-jvm-fast.sh                 # 快路径：只编被测试依赖的那�
 ```
 
 覆盖面是 `app/src/test/java/` 下的纯逻辑：`zhicode/api/`（SSE 分帧、协议解析、失败分类）、
-`zhicode/core/`（权限档位、风险分类、文件操作、上下文压缩）、`zhicode/tools/`、
-`compose/model/` 与 `compose/theme/`。这些类刻意不 `import android.*`，所以能在 JVM 上直接跑。
+`zhicode/core/`（权限档位、风险分类、文件操作、上下文压缩、**系统提示词结构**）、`zhicode/tools/`、
+`compose/model/`（含 **`PromptSlots`**、**`Licenses` 对 `NOTICE` 的逐条校验**）与 `compose/theme/`
+（含 **`ThemeSpecTest`**：预设 id 稳定、缩放夹取吃掉 `NaN`、预设与默认值自洽）。
+这些类刻意不 `import android.*`（也不 `import androidx.compose.*`），所以能在 JVM 上直接跑。
 
 > **工程里曾经另有一套「源码文本级结构断言」**（`app/tests/*.java` + `test-source-no-build.sh`），
 > 它靠 grep 源码字符串来钉住约定，当时**有一部分是红的**，已整套删除。
@@ -212,9 +220,12 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 │   │ │   ├── FileTree.kt ZhiFileProvider.java ZhiDocumentsProvider.kt # 文件树 / 分享 / SAF
 │   │ │   ├── UiCanvasController.java UiCanvasStore.java # UI canvas 覆盖层
 │   │ │   ├── compose/ # Compose 界面层
-│   │ │   │ ├── theme/ # 圆角 / 间距 / 动效 / 字阶 token + 主题入口（颜色全部来自 Miuix）
-│   │ │   │ ├── model/ # UiModels（含 WorkspaceUiState）、ActionBusy、ToolKind、TurnLayout、ToolGrouping
-│   │ │   │ ├── data/ # API 配置、模型目录、MCP、技能、角色卡、记忆、搜索服务、会话读取
+│   │ │   │ ├── theme/ # 圆角 / 间距 / 动效 / 字阶 token + 主题入口（ZhiAppTheme）
+│   │ │   │ │          ZhiThemeSpec（预设表与缩放夹取，纯逻辑）
+│   │ │   │ ├── model/ # UiModels（含 WorkspaceUiState）、ActionBusy、ToolKind、TurnLayout、
+│   │ │   │ │          ToolGrouping、PromptSlots（提示词槽位）、Licenses（第三方清单）
+│   │ │   │ ├── data/ # API 配置、模型目录、MCP、技能、角色卡、记忆、搜索服务、会话读取、
+│   │ │   │ │          ThemeStore（主题设置的形状与落盘）
 │   │ │   │ ├── state/ # WorkspaceViewModel（StateFlow<WorkspaceUiState> + 引擎事件）
 │   │ │   │ ├── engine/ # ZhiEngineController（引擎接线与流式合并）、ToolText
 │   │ │   │ ├── runtime/ # EnvDoctor（环境自检）
@@ -223,8 +234,10 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 │   │ │   │     ├── pages/ # **一个页面一个文件**：WorkspacePage / ChatPage / TerminalPage /
 │   │ │   │     │          FilesPage / EditorPage / SettingsPage / ApiConfigPage / McpConfigPage /
 │   │ │   │     │          SearchServicesPage / SkillsPage / RoleCardsPage / MemoryPage /
+│   │ │   │     │          PromptsPage / ThemePage / AboutPage / ThirdPartyLicensesPage /
 │   │ │   │     │          SandboxPage / UiDebugPage
-│   │ │   │     ├── pages/overlays/ # 浮层：权限 / 计划审批 / 选择器 / 任务清单 / 模型 / 附件 / 环境 / 调试浮层
+│   │ │   │     ├── pages/overlays/ # 浮层：权限 / 计划审批 / 选择器 / 任务清单 / 模型 / 附件 /
+│   │ │   │     │          环境 / 调试浮层 / 自由复制抽屉
 │   │ │   │     ├── Common.kt # Miuix 唯一转发层（Zhi* 包装）
 │   │ │   │     ├── PageFeedback.kt # 非对话页的操作反馈条（含页面级数据源）
 │   │ │   │     ├── AppScaffold.kt # 主题 + 导航栈 + 页面路由（不再放页面内容）
@@ -268,14 +281,20 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 | 会话数据长什么样 | `~/.zhicode/sessions.db`（SQLite 单库）＋ `~/.zhicode/blobs/aa/bb/<sha256>`（大内容） |
 | 落盘编码（不存 JSON 文本） | `.../zhicode/storage/BinaryValueCodec.java` |
 | 旧会话怎么搬过来 | `.../zhicode/storage/LegacySessionImporter.java`（一次性，校验通过才删旧文件） |
-| 读历史为什么只读最近 200 条 | `.../storage/SessionStore.java` 的 `readRowsWindow` ＋ `compose/data/SessionReader.kt` 的 `openPage` |
+| 读历史为什么只读最近 100 条 | `.../storage/SessionStore.java` 的 `readRowsWindow` ＋ `compose/data/SessionReader.kt` 的 `openPage` / `PAGE_MESSAGES` |
 | 对话流为什么有 600 条上限 | `compose/state/WorkspaceViewModel.kt` 的 `maxResidentItems` / `trimResidentTail` / `jumpToLatest` |
+| 顶部下拉加载更早的消息 | `compose/ui/chat/ChatList.kt` 的 `PullToRefresh` ＋ `WorkspaceViewModel.loadOlderTranscript` |
+| 点工具卡没反应 / 展开了界面不更新 | `WorkspaceUiState.transcriptRevision` —— 列表用**廉价结构指纹**当 `remember` 的 key，原地改内容必须 +1（见第 8 节） |
 | 会话大内容怎么回收 | `SessionDatabase.blob_refs` + `SessionStore.maintain()`（宽限期、增量 vacuum） |
 | 会话怎么导出 / 导入 | `.../storage/SessionArchive.java`（唯一的 `.jsonl.gz` 交换格式入口） |
 | 内存诊断日志（release 也打） | `.../storage/ZhiMemory.java`，tag `ZhiCodeMem` |
 | 项目目录键（计划 / 任务用） | `.../zhicode/storage/ProjectPaths.java` |
 | 内置 shell 怎么执行命令 | `.../zhicode/termux/TermuxShellExecutor.java` |
 | 界面 token（圆角 / 间距 / 动效 / 字阶） | `com/zhizhu/zhicode/compose/theme/`（**颜色不在这里**） |
+| 主题设置（预设色 / Monet / AMOLED / 缩放 / 显示开关） | `compose/ui/pages/ThemePage.kt`（界面）+ `compose/data/ThemeStore.kt`（形状与落盘）+ `compose/theme/ZhiAppTheme.kt`（**唯一**生成色板的地方） |
+| 预设主题列表 | `compose/theme/ZhiThemeSpec.kt` 的 `THEME_PRESETS`（改 `id` 等于让老用户的选择失效） |
+| 三处可改的提示词 | `compose/model/PromptSlots.kt` + `compose/ui/pages/PromptsPage.kt`；默认文案在 `PromptSlots.defaultValue` 与 `ContextCompactor` |
+| 关于页 / 第三方许可清单 | `compose/ui/pages/AboutPage.kt`、`ThirdPartyLicensesPage.kt` + `compose/model/Licenses.kt`（**必须**与根 `NOTICE` 同名同许可） |
 | 某个页面 | `compose/ui/pages/<XxxPage>.kt` —— 一个页面一个文件，文件名即入口名 |
 | 某个浮层 | `compose/ui/pages/overlays/<Xxx>Overlay.kt` |
 | 某个界面组件（共享） | `compose/ui/<区域>/`；先确认 `Common.kt` 里有没有现成的 `Zhi*` 包装 |
@@ -299,10 +318,21 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 - **Miuix 组件只在 `compose/ui/Common.kt` 里转发**：调用点用 `Zhi*` 包装，不直接引库，库升级只影响一个文件。
 - **颜色走 `MiuixTheme.colorScheme` / `ZhiColors`，不要在调用点写死色值**：层级色与语义色都有现成 token，
   深浅两套由主题决定。
+- **色板只有一个生成处**：`theme/ZhiAppTheme.kt` 的 `rememberZhiColors`。它**必须**在
+  `CompositionLocalProvider(LocalZhiDark, LocalAmoled, …)` **之内**求值 —— 挪到外面会让
+  `ZhiColors.backdrop()` 读到默认值（浅色、非纯黑），表现就是「深色模式下背板是浅灰」「AMOLED 开关无效」。
+- **`ThemeSettings.dynamicColor` 决定的是中性色，不是强调色**：关掉 Monet 时种子色**仍然**当强调色用，
+  固定的只是背板 / 面板 / 卡片 / 次级填充。反过来实现会让「点预设色卡界面什么都不变」重现。
 - **一个页面一个文件**：整页放 `ui/pages/<XxxPage>.kt`，浮层放 `ui/pages/overlays/`；`AppScaffold.kt` 只留主题、导航栈与路由。
 - **尺寸 / 字阶取既有 token 或 Miuix 主题**，不要在调用点写新的裸数字与裸字号。
 - **会落盘的动作走 `ViewModel.runBusy(...)`**：同一动作在飞时第二次点击被静默丢弃，界面用 `state.isBusy(key)` 禁用按钮。
 - 输入框一律走 `ZhiTextField`，长按菜单一律走 `ZhiAnchoredActionMenu` —— 两处都有明确的失败模式（前者会丢文字色与光标位置，后者在观察器消费事件时会把点击与无障碍语义顶掉），改之前先看 [`docs/ui-miuix.md`](docs/ui-miuix.md) 第 6 节。
+- **「内容原地变了」必须让列表知道**：对话流用一份廉价结构指纹（条数 / 首尾 id / 最后一条正文长度 /
+  最后一条工具数 / 补页与跳转版本号 / `transcriptRevision`）当 `remember` 的 key，而不是拿整份
+  `List<ChatItem>` 去深比较（流式输出每 32ms 换一次 list，深比较会把主线程吃满）。
+  代价是**展开工具、展开分组、展开思考、补回输出全文这四类修改不会改变指纹** ——
+  它们必须显式 `transcriptRevision + 1`，否则 `id → ChatItem` 索引仍指向旧实例，
+  界面表现就是「点了没反应」，而且不会编译失败。
 
 > **约定没有自动化守卫。** 上面这些约束写错了**不会编译失败**，而仓库里已经不再有源码文本级断言（见第 4 节），
 > 所以它们只能靠读代码与 review 来守 —— 别把它们当成「已经确认满足」的结论。
@@ -320,6 +350,16 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
 面向该档位的取舍（流式 Markdown 的增量解析、`LazyColumn` 单个 item 的节点上限、重组路径上不做 O(n) 字符串手术、
 主线程不碰磁盘 IO、热路径组件不收整份 `WorkspaceUiState`、列表贴底不用挂起动画等）逐条写在
 **[`docs/performance.md`](docs/performance.md)**。
+
+主题侧的两条同类取舍（这两条都是**用 bug 换来的**，别当优化建议看）：
+
+- **色板必须 `remember`**：`Colors` 有 50 多个 `mutableStateOf` 字段，每次重组新建一个还让
+  `MiuixTheme` 内部重跑全量赋值。两条路径各有自己的缓存 key：固定中性色那条取
+  `(深浅, 背板, 种子色)`，Monet 那条取 `(生成结果, 背板)`，`ThemeController` 本身另取
+  `(种子色, 风格, 规范, 深浅)` —— 换主题时不该重算没变的那一侧。
+- **预设色卡的配色不走 `ThemeController`**：七张卡各跑一次 HCT 就是七次全量调色板生成。
+  色卡只需要"大概什么颜色"，所以准备了 `ZhiThemeSpec.presetSwatch` 这个纯算术近似
+  （`mixArgb` + `shiftHue`）。⚠️ **它目前还没有调用点** —— `ThemePage` 的色卡仍是单色方块。
 
 ---
 
