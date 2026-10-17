@@ -187,6 +187,18 @@ public final class ZhiCodeEngine {
                     + " Respond with text only and never call tools.";
 
     /**
+     * 实际使用的摘要系统提示：用户填过就用他的，空串用默认。
+     *
+     * <p>空串表示"没改过"这条约定与 `model/PromptSlots.kt` 一致 ——
+     * 那里是唯一给出默认文案的地方，这里只是把它取出来。
+     */
+    private static String summarySystemPrompt(SessionConfig config) {
+        String custom = config == null ? "" : config.summaryPrompt;
+        String value = custom == null ? "" : custom.trim();
+        return value.isEmpty() ? SUMMARY_SYSTEM_PROMPT : value;
+    }
+
+    /**
      * 可以安全重放的失败码，取值来自 {@link StreamFailure#code}。
      *
      * <p>这些都是「请求根本没被处理、或者处理到一半被掐断」的情形。真正被拒绝的
@@ -2264,8 +2276,9 @@ public final class ZhiCodeEngine {
                 if (attempt > 0) {
                     reportStatus("摘要请求超过模型窗口，正在按 API 回合缩减后重试 " + attempt + "/2…");
                 }
-                return provider.createMessage(summaryConfig, SUMMARY_SYSTEM_PROMPT,
-                        ContextCompactor.buildSummaryMessages(plan, customInstructions, attempt),
+                return provider.createMessage(summaryConfig, summarySystemPrompt(summaryConfig),
+                        ContextCompactor.buildSummaryMessages(plan, customInstructions, attempt,
+                                summaryConfig.compactPromptHead),
                         new JSONArray(), SILENT_STREAM);
             } catch (Exception failure) {
                 lastFailure = failure;

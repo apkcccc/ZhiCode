@@ -84,6 +84,15 @@ public final class ApiSettingsStore {
         static final String VISION_ENABLED = "vision_enabled";
         static final String EFFORT = "effort";
         static final String CUSTOM_PROMPT = "custom_system_prompt";
+        /**
+         * 可自定义的提示词槽位（见 {@code model/PromptSlots.kt}）。
+         *
+         * <p>三个键都必须**存在即覆盖**：空串表示"用默认"，所以读到空串时不能当成"没配过"
+         * 而回落到旧值 —— 那会让「恢复默认」这个动作在重启后反弹。
+         */
+        static final String INIT_PROMPT = "init_prompt";
+        static final String SUMMARY_PROMPT = "summary_prompt";
+        static final String COMPACT_PROMPT_HEAD = "compact_prompt_head";
         static final String ROLE_CARD = "role_card";
         static final String REASONING_SUMMARY = "reasoning_summary";
         static final String PRESERVE_REASONING = "preserve_reasoning_state";
@@ -218,6 +227,14 @@ public final class ApiSettingsStore {
                 item(c -> c.preserveReasoningState, (c, v) -> c.preserveReasoningState = (Boolean) v));
         SETTINGS.put(Key.CUSTOM_PROMPT, textItem(c -> c.customSystemPrompt,
                 (c, v) -> c.customSystemPrompt = v, ApiSettingsStore::sanitizePrompt));
+        // 提示词槽位用 textItem 而不是 sanitizePrompt：后者会按"提示词"的规则裁剪，
+        // 而这三项是**用户自己的原话**，多留几个换行不该被吃掉。
+        SETTINGS.put(Key.INIT_PROMPT, textItem(c -> c.initPrompt,
+                (c, v) -> c.initPrompt = v, ApiSettingsStore::trimToEmpty));
+        SETTINGS.put(Key.SUMMARY_PROMPT, textItem(c -> c.summaryPrompt,
+                (c, v) -> c.summaryPrompt = v, ApiSettingsStore::trimToEmpty));
+        SETTINGS.put(Key.COMPACT_PROMPT_HEAD, textItem(c -> c.compactPromptHead,
+                (c, v) -> c.compactPromptHead = v, ApiSettingsStore::trimToEmpty));
         SETTINGS.put(Key.ROLE_CARD, textItem(c -> c.roleCard,
                 (c, v) -> c.roleCard = v, ApiSettingsStore::sanitizePrompt));
         SETTINGS.put(Key.TOOL_MODE, item(c -> c.toolMode, (c, v) -> c.toolMode = (String) v));

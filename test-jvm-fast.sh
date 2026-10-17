@@ -35,6 +35,7 @@ MAIN_SOURCES=(
     app/src/main/java/com/termux/app/zhicode/core/StorageLinks.java
     app/src/main/java/com/termux/app/zhicode/core/FileOps.java
     app/src/main/java/com/termux/app/zhicode/model/SessionConfig.java
+    app/src/main/java/com/termux/app/zhicode/core/SystemPromptBuilder.java
     app/src/main/java/com/termux/app/zhicode/tools/WebSearchJson.java
     app/src/main/java/com/termux/app/zhicode/tools/WebSearchTool.java
 )
@@ -61,6 +62,7 @@ MAIN_KT_SOURCES=(
     app/src/main/java/com/zhizhu/zhicode/compose/model/TurnLayout.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/ActionBusy.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/McpDraft.kt
+    app/src/main/java/com/zhizhu/zhicode/compose/model/PromptSlots.kt
 )
 
 # 需要编译并运行的测试类（相对 app/src/test/java、点号包名）。
@@ -84,6 +86,9 @@ DEFAULT_TESTS=(
     com.zhizhu.zhicode.compose.model.TurnLayoutTest
     com.zhizhu.zhicode.compose.model.ActionBusyTest
     com.zhizhu.zhicode.compose.model.McpFormLogicTest
+    com.zhizhu.zhicode.compose.model.BrandTextTest
+    com.termux.app.zhicode.core.PromptStructureTest
+    com.zhizhu.zhicode.compose.model.PromptSlotsTest
 )
 
 # 哪些目标是 Kotlin。

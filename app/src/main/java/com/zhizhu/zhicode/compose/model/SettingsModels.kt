@@ -981,6 +981,15 @@ data class AppSettings(
     /** 自动压缩上限，取值 50..100（百分比）。 */
     val autoCompactPercent: Int = 80,
     val customSystemPrompt: String = "",
+    /**
+     * 可自定义的提示词槽位，三份都遵循「空串 = 用默认」（见 [PromptSlot]）。
+     *
+     * <p>刻意**不**在这里放默认文案：默认值的唯一来源是 [PromptSlot.defaultValue]。
+     * 两份的话，改一处忘另一处就会出现"界面上点恢复默认、引擎用的还是旧的"。
+     */
+    val initPrompt: String = "",
+    val summaryPrompt: String = "",
+    val compactPromptHead: String = "",
     /** API 配置记录（列表 + 当前选用）。列表可以为空 = 还没有配过。 */
     val apiProfiles: List<ApiProfile> = DEFAULT_API_PROFILES,
     val activeProfileId: String = "",
@@ -1063,6 +1072,10 @@ data class SettingsDraft(
     val contextWindow: Int,
     val projectPath: String,
     val customSystemPrompt: String,
+    /** 可自定义的提示词槽位（空串 = 用默认，见 [PromptSlot]）。 */
+    val initPrompt: String,
+    val summaryPrompt: String,
+    val compactPromptHead: String,
     /** 只读展示用：当前 API 记录名 + 模型名（对应参考图的「deepseek · openai-chat · deepseek-flash」）。 */
     val profileName: String,
     val modelLabel: String,
@@ -1093,6 +1106,9 @@ data class SettingsDraft(
                 contextWindow = state.contextWindow,
                 projectPath = state.projectPath,
                 customSystemPrompt = s.customSystemPrompt,
+                initPrompt = s.initPrompt,
+                summaryPrompt = s.summaryPrompt,
+                compactPromptHead = s.compactPromptHead,
                 profileName = state.profileName,
                 modelLabel = state.modelLabel,
                 visionEnabled = s.visionEnabled,
@@ -1143,6 +1159,9 @@ data class SettingsDraft(
             autoCompact = autoCompact,
             autoCompactPercent = clampCompactPercent(autoCompactPercent),
             customSystemPrompt = customSystemPrompt,
+            initPrompt = initPrompt,
+            summaryPrompt = summaryPrompt,
+            compactPromptHead = compactPromptHead,
         ),
         settingsDraft = if (keepDraft) this else null,
     )

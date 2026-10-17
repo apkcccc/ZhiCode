@@ -7,6 +7,7 @@ import com.zhizhu.zhicode.compose.ui.pages.ApiConfigPage
 import com.zhizhu.zhicode.compose.ui.pages.McpConfigPage
 import com.zhizhu.zhicode.compose.ui.pages.SearchServicesPage
 import com.zhizhu.zhicode.compose.ui.pages.MemoryPage
+import com.zhizhu.zhicode.compose.ui.pages.PromptsPage
 import com.zhizhu.zhicode.compose.ui.pages.RoleCardsPage
 import com.zhizhu.zhicode.compose.ui.pages.SkillsPage
 import com.zhizhu.zhicode.compose.ui.pages.SettingsPage
@@ -249,6 +250,7 @@ private fun ZhiCodeScreen(
                 state.skills != null -> add(SettingsKey.Skills)
                 state.roleCards != null -> add(SettingsKey.RoleCards)
                 state.memory != null -> add(SettingsKey.Memory)
+                state.promptsOpen -> add(SettingsKey.Prompts)
             }
         }
     }
@@ -449,6 +451,16 @@ private fun ZhiCodeScreen(
                 onCancelEdit = viewModel::cancelMemoryEdit,
             )
         }
+        entry<SettingsKey.Prompts>(swipeDismiss = swipeBack) {
+            PromptsPage(
+                initPrompt = state.settings.initPrompt,
+                summaryPrompt = state.settings.summaryPrompt,
+                compactPromptHead = state.settings.compactPromptHead,
+                onDismiss = viewModel::closePrompts,
+                onChange = viewModel::setPromptSlot,
+                onReset = viewModel::resetPromptSlot,
+            )
+        }
         // UI 调试整页（仅 debug 构建有入口）。它拿的是**真实 state 与 ViewModel**：
         // 页面里的输入器、各浮层入口都是真能用的，不是静态贴图。
         entry<AppKey.UiDebug>(swipeDismiss = swipeBack) {
@@ -484,7 +496,7 @@ private sealed interface AppKey : NavKey {
     data object UiDebug : AppKey
 }
 
-/** 设置相关页面：hub 与五个二级页。 */
+/** 设置相关页面：hub 与各二级页。 */
 private sealed interface SettingsKey : NavKey {
     data object Hub : SettingsKey
     data object Api : SettingsKey
@@ -493,4 +505,5 @@ private sealed interface SettingsKey : NavKey {
     data object Skills : SettingsKey
     data object RoleCards : SettingsKey
     data object Memory : SettingsKey
+    data object Prompts : SettingsKey
 }

@@ -57,6 +57,17 @@ public final class SessionConfig {
 
     /** 用户自己写的高优先级指令。仍然低于代码强制的安全与权限规则。 */
     public String customSystemPrompt = "";
+    /**
+     * `/init` 那一轮的指令。**空串表示用默认**（见 {@code model/PromptSlots.kt}）。
+     *
+     * <p>为什么空串而不是在这里写一份默认文案：默认值会随版本改进，
+     * 预填之后老用户的库里就固化了旧文案，永远拿不到改进。
+     */
+    public String initPrompt = "";
+    /** 上下文压缩时用的系统提示。空串表示用默认。 */
+    public String summaryPrompt = "";
+    /** 上下文压缩请求正文的开场段。空串表示用默认。 */
+    public String compactPromptHead = "";
     /** 角色卡。 */
     public String roleCard = "";
     /** 推理摘要的呈现方式。 */
@@ -173,6 +184,9 @@ public final class SessionConfig {
         copy.effort = effort;
 
         copy.customSystemPrompt = customSystemPrompt;
+        copy.initPrompt = initPrompt;
+        copy.summaryPrompt = summaryPrompt;
+        copy.compactPromptHead = compactPromptHead;
         copy.roleCard = roleCard;
         copy.reasoningSummary = reasoningSummary;
         copy.preserveReasoningState = preserveReasoningState;

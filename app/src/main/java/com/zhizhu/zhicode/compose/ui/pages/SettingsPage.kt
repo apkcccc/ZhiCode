@@ -182,7 +182,7 @@ fun SettingsPage(
                 item(key = "modelService", contentType = "settings-group") {
                     SettingsGroup("模型与服务") { ModelServicePage(draft, onChange, onNavigate) }
                 }
-                item(key = "context", contentType = "settings-group") { SettingsGroup("上下文与项目") { ContextProjectPage(draft, onChange) } }
+                item(key = "context", contentType = "settings-group") { SettingsGroup("上下文与项目") { ContextProjectPage(draft, onChange, onNavigate) } }
                 item(key = "agent", contentType = "settings-group") { SettingsGroup("Agent 与安全") { AgentSecurityPage(draft, onChange) } }
                 item(key = "extensions", contentType = "settings-group") { SettingsGroup("扩展") { ExtensionsPage(onNavigate, extensions) } }
             }
@@ -425,7 +425,11 @@ private fun NetworkPage(
 }
 
 @Composable
-private fun ContextProjectPage(draft: SettingsDraft, onChange: (SettingsDraft) -> Unit) {
+private fun ContextProjectPage(
+    draft: SettingsDraft,
+    onChange: (SettingsDraft) -> Unit,
+    onNavigate: (String) -> Unit,
+) {
     SettingsIntField(
         title = "上下文窗口",
         value = draft.contextWindow,
@@ -471,6 +475,15 @@ private fun ContextProjectPage(draft: SettingsDraft, onChange: (SettingsDraft) -
 
     ProjectPathField(draft, onChange)
     CustomSystemPromptField(draft, onChange)
+    // 提示词模板是**独立整页**（形态参考 rikkahub 的提示词页：一行预览 + 抽屉编辑）。
+    // 三份文案都不常用，塞进这一页会把最常用的"自定义头部提示词"挤下去。
+    SettingsEntry(
+        title = "提示词模板",
+        valueText = "自定义 /init、压缩摘要的系统提示与开场段；留空即用内置文案",
+        onClick = { onNavigate("prompts") },
+        icon = ZhiIcons.edit,
+        plate = SettingsPlateColors.purple,
+    )
 }
 
 /**

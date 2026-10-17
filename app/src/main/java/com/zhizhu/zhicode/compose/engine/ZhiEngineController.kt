@@ -46,6 +46,10 @@ internal data class EngineOverrides(
     val projectDirectory: String? = null,
     val visionEnabled: Boolean? = null,
     val customSystemPrompt: String? = null,
+    /** 提示词槽位：空串 = 用默认（见 model/PromptSlots.kt）。*/
+    val initPrompt: String? = null,
+    val summaryPrompt: String? = null,
+    val compactPromptHead: String? = null,
     /** 角色卡内容。引擎把它作为 &lt;role_card&gt; 块注入系统提示词（见 SystemPromptBuilder）。 */
     val roleCard: String? = null,
     val autoCompact: Boolean? = null,
@@ -251,6 +255,7 @@ internal class ZhiEngineController(
         config.profileId, config.profileRevision.toString(), config.credentialRevision.toString(),
         config.protocol, config.baseUrl, config.extraHeaders, config.model, config.effort,
         config.permissionMode, config.projectDirectory, config.customSystemPrompt,
+        config.initPrompt, config.summaryPrompt, config.compactPromptHead,
         config.roleCard, config.toolMode, config.visionEnabled.toString(),
         config.autoCompact.toString(), config.contextWindowTokens.toString(),
         config.webSearchEnabled.toString(), config.webSearchProvider,
@@ -962,6 +967,10 @@ internal fun applyEngineOverrides(config: SessionConfig, o: EngineOverrides) {
     o.projectDirectory?.let { if (it.isNotBlank()) config.projectDirectory = it }
     o.visionEnabled?.let { config.visionEnabled = it }
     o.customSystemPrompt?.let { config.customSystemPrompt = it }
+    // 空串也要写：用户点「恢复默认」之后，引擎侧不该继续用旧的自定义文案。
+    o.initPrompt?.let { config.initPrompt = it }
+    o.summaryPrompt?.let { config.summaryPrompt = it }
+    o.compactPromptHead?.let { config.compactPromptHead = it }
     o.autoCompact?.let { config.autoCompact = it }
     // 界面用的是百分比整数，引擎用的是倍率；在这里换算，别把两种口径泄进引擎。
     o.autoCompactPercent?.let { config.autoCompactRatio = (it.coerceIn(50, 100)) / 100.0 }
@@ -1003,6 +1012,9 @@ internal fun readEngineSettings(store: ApiSettingsStore): EngineOverrides? =
             contextWindow = config.contextWindowTokens,
             projectDirectory = config.projectDirectory,
             customSystemPrompt = config.customSystemPrompt,
+            initPrompt = config.initPrompt,
+            summaryPrompt = config.summaryPrompt,
+            compactPromptHead = config.compactPromptHead,
             visionEnabled = config.visionEnabled,
             autoCompact = config.autoCompact,
             autoCompactPercent = (config.autoCompactRatio * 100).toInt().coerceIn(50, 100),

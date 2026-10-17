@@ -813,6 +813,15 @@ data class WorkspaceUiState(
     val skills: com.zhizhu.zhicode.compose.model.SkillsState? = null,
     val roleCards: com.zhizhu.zhicode.compose.model.RoleCardsState? = null,
     val memory: com.zhizhu.zhicode.compose.model.MemoryState? = null,
+    /**
+     * 提示词设置页是否打开。
+     *
+     * <p>用**布尔**而不是像 [skills] 那样的载荷对象：这一页要编辑的三份文案就是
+     * `settings.initPrompt` / `summaryPrompt` / `compactPromptHead` 本身，
+     * 没有额外要从磁盘读的东西（与记忆页不同，那里要列文件、要知道每个文件多大）。
+     * 再包一层状态对象，只会多一份要与 settings 同步的副本。
+     */
+    val promptsOpen: Boolean = false,
     val modelPicker: com.zhizhu.zhicode.compose.model.ModelPickerState? = null,
     /**
      * 非空即「UI 调试」整页打开（**仅 debug 构建**有入口，见设置页的「扩展」组）。

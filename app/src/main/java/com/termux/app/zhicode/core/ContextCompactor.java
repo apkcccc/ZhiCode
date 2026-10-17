@@ -224,9 +224,18 @@ final class ContextCompactor {
      * 上一次的请求超过了窗口，所以每次都得更小。
      */
     static JSONArray buildSummaryMessages(Plan plan, String customInstructions, int attempt) throws Exception {
+        return buildSummaryMessages(plan, customInstructions, attempt, "");
+    }
+
+    /**
+     * @param promptHead 用户自定义的开场段（{@code SessionConfig.compactPromptHead}）。
+     *                   空串 = 用 {@link #PROMPT_HEAD}。
+     */
+    static JSONArray buildSummaryMessages(Plan plan, String customInstructions, int attempt,
+                                          String promptHead) throws Exception {
         JSONArray out = reduceForSummary(plan.prefix, Math.max(0, attempt));
         out.put(message("user", new JSONArray().put(textBlock(compactPrompt(customInstructions,
-                plan.recent.length() > 0)))));
+                plan.recent.length() > 0, promptHead)))));
         return out;
     }
 
@@ -364,7 +373,20 @@ final class ContextCompactor {
             "9. Direct Next Step, only if it follows the latest request"};
 
     private static String compactPrompt(String customInstructions, boolean recentPreserved) {
-        StringBuilder prompt = new StringBuilder(PROMPT_HEAD);
+        return compactPrompt(customInstructions, recentPreserved, "");
+    }
+
+    /**
+     * @param promptHead 用户自定义的开场段。空串 = 用 {@link #PROMPT_HEAD}。
+     *
+     * <p>自定义时会补一个分隔符：{@link #PROMPT_HEAD} 原文以空格结尾，直接接后面那句
+     * 「Newer messages are preserved…」读起来是一句话；用户自己写的那段多半以句号结尾，
+     * 不补分隔就会出现「…above.Newer messages…」这种粘在一起的文本，
+     * 而模型会把它当成一个畸形的词而不是两句话。
+     */
+    private static String compactPrompt(String customInstructions, boolean recentPreserved,
+                                        String promptHead) {
+        StringBuilder prompt = new StringBuilder(promptHead(promptHead));
         prompt.append(recentPreserved ? PROMPT_KEEP_RECENT : PROMPT_REPLACE_ALL);
         prompt.append(PROMPT_ANALYSIS);
         prompt.append(PROMPT_SECTIONS_HEADER);
@@ -380,6 +402,13 @@ final class ContextCompactor {
         }
         prompt.append(PROMPT_REMINDER);
         return prompt.toString();
+    }
+
+    /** 见 {@link #compactPrompt(String, boolean, String)} 的参数说明。 */
+    private static String promptHead(String customized) {
+        String value = customized == null ? "" : customized.trim();
+        if (value.isEmpty()) return PROMPT_HEAD;
+        return Character.isWhitespace(value.charAt(value.length() - 1)) ? value : value + "\n";
     }
 
     // ------------------------------------------------------------ 摘要请求的缩减

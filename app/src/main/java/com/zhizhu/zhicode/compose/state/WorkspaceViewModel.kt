@@ -82,6 +82,7 @@ import com.zhizhu.zhicode.compose.model.ModelProfileTab
 import com.zhizhu.zhicode.compose.model.ModelPickerState
 import com.zhizhu.zhicode.compose.model.PermissionMode
 import com.zhizhu.zhicode.compose.model.PermissionRequest
+import com.zhizhu.zhicode.compose.model.PromptSlot
 import com.zhizhu.zhicode.compose.model.QueuedPrompt
 import com.zhizhu.zhicode.compose.model.PlanApproval
 import com.zhizhu.zhicode.compose.model.RiskLevel
@@ -1809,7 +1810,40 @@ class WorkspaceViewModel(
                 busySessionIds = it.busySessionIds + it.activeSessionId,
             )
         }
-        startTurn(INIT_INSTRUCTION)
+        startTurn(PromptSlot.INIT.resolve(_state.value.settings.initPrompt))
+    }
+
+    /**
+     * 写入一个提示词槽位（空串 = 恢复默认）。
+     *
+     * <p>三个槽位走同一个入口：它们的语义完全一样（空串=默认），
+     * 各写一个 setter 只会让"恢复默认"这条逻辑出现三份。
+     */
+    fun setPromptSlot(slot: PromptSlot, value: String) {
+        val draft = _state.value.settingsDraft ?: SettingsDraft.from(_state.value)
+        val updated = when (slot) {
+            PromptSlot.INIT -> draft.copy(initPrompt = value)
+            PromptSlot.COMPACT_SYSTEM -> draft.copy(summaryPrompt = value)
+            PromptSlot.COMPACT_HEAD -> draft.copy(compactPromptHead = value)
+        }
+        applySettingsDraft(updated)
+    }
+
+    /** 编辑页里「恢复默认」：把该槽位清成空串。 */
+    fun resetPromptSlot(slot: PromptSlot) = setPromptSlot(slot, "")
+
+    /**
+     * 打开「提示词」整页。
+     *
+     * <p>只置一个布尔：这一页要的三份文案都在 `state.settings` 里，没有要读盘的东西，
+     * 所以不需要像记忆页那样先推页面再异步取载荷。
+     */
+    fun openPrompts() {
+        _state.update { it.copy(settingsOpen = true, sidebarOpen = false, promptsOpen = true) }
+    }
+
+    fun closePrompts() {
+        _state.update { it.copy(promptsOpen = false) }
     }
 
     fun removeAttachment(id: String) {
@@ -1962,6 +1996,9 @@ class WorkspaceViewModel(
             contextWindow = s.contextWindow,
             projectDirectory = s.projectPath,
             customSystemPrompt = s.settings.customSystemPrompt,
+            initPrompt = s.settings.initPrompt,
+            summaryPrompt = s.settings.summaryPrompt,
+            compactPromptHead = s.settings.compactPromptHead,
             visionEnabled = s.settings.visionEnabled,
             autoCompact = s.settings.autoCompact,
             autoCompactPercent = s.settings.autoCompactPercent,
@@ -4096,6 +4133,9 @@ class WorkspaceViewModel(
                 settings = s.settings.copy(
                     visionEnabled = o.visionEnabled ?: s.settings.visionEnabled,
                     customSystemPrompt = o.customSystemPrompt ?: s.settings.customSystemPrompt,
+                    initPrompt = o.initPrompt ?: s.settings.initPrompt,
+                    summaryPrompt = o.summaryPrompt ?: s.settings.summaryPrompt,
+                    compactPromptHead = o.compactPromptHead ?: s.settings.compactPromptHead,
                     autoCompact = o.autoCompact ?: s.settings.autoCompact,
                     autoCompactPercent = o.autoCompactPercent ?: s.settings.autoCompactPercent,
                     webSearchEnabled = o.webSearchEnabled ?: s.settings.webSearchEnabled,
@@ -4117,6 +4157,9 @@ class WorkspaceViewModel(
                         contextWindow = o.contextWindow ?: draft.contextWindow,
                         projectPath = o.projectDirectory?.takeIf { p -> p.isNotBlank() } ?: draft.projectPath,
                         customSystemPrompt = o.customSystemPrompt ?: draft.customSystemPrompt,
+                        initPrompt = o.initPrompt ?: draft.initPrompt,
+                        summaryPrompt = o.summaryPrompt ?: draft.summaryPrompt,
+                        compactPromptHead = o.compactPromptHead ?: draft.compactPromptHead,
                         visionEnabled = o.visionEnabled ?: draft.visionEnabled,
                         autoCompact = o.autoCompact ?: draft.autoCompact,
                         autoCompactPercent = o.autoCompactPercent ?: draft.autoCompactPercent,
@@ -5959,6 +6002,9 @@ class WorkspaceViewModel(
     private fun differsOnlyInFreeText(a: SettingsDraft, b: SettingsDraft): Boolean =
         a.copy(
             customSystemPrompt = b.customSystemPrompt,
+            initPrompt = b.initPrompt,
+            summaryPrompt = b.summaryPrompt,
+            compactPromptHead = b.compactPromptHead,
             projectPath = b.projectPath,
             contextWindow = b.contextWindow,
             webSearchMaxResults = b.webSearchMaxResults,
@@ -6086,6 +6132,7 @@ class WorkspaceViewModel(
             "searchServices" -> openSearchServices()
             "roleCards" -> openRoleCards()
             "memory" -> openMemory()
+            "prompts" -> openPrompts()
             "uiDebug" -> openUiDebug()
             else -> Unit
         }
@@ -6795,21 +6842,14 @@ class WorkspaceViewModel(
         private const val TEXT_ATTACHMENT_LIMIT = 60_000
 
         /**
-         * `/init` 的指令，逐字取自原版，只改了一处：目标文件名换成 `ZhiCode.md`。
+         * `/init` 的指令**搬走了**。
          *
-         * 全英文是刻意的（原版如此）：这段是要模型执行的指令，
-         * 而它明确要求限制调研范围、禁止起子 Agent，措辞改动会改变实际行为，
-         * 所以不翻译、不改写。
+         * <p>它现在住在 `model/PromptSlots.kt` 的 [PromptSlot.INIT.defaultValue] ——
+         * 因为这一项已经可以在设置里改，默认值必须有**唯一**的来源：
+         * 留一份在这里，用户点「恢复默认」就会恢复成另一份文案。
          *
-         * 目标文件名必须是 `ZhiCode.md`：写别的名字会让界面在另一个文件上找它，
-         * `/init` 看起来就成了「什么都不做」。
+         * <p>调用点是 `PromptSlot.INIT.resolve(state.settings.initPrompt)`。
          */
-        private const val INIT_INSTRUCTION =
-            "This is the built-in fast /init maintenance command. Do not enter plan mode, create tasks, " +
-                "launch subagents, or perform broad repository research. Read only the existing " +
-                "ZhiCode.md/CLAUDE.md/README and primary build manifest or script when present, then directly " +
-                "create or improve ZhiCode.md with concise build, test, architecture, conventions, and " +
-                "repository-specific instructions. Preserve useful existing instructions and run at most " +
-                "one small verification command."
+
     }
 }
