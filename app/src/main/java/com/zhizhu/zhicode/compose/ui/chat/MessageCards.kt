@@ -134,22 +134,47 @@ fun EmptyState() {
 /**
  * 列表顶部「上面还有更早的历史」的占位。
  *
- * 恢复一条会话时只读最近若干条消息（见 `SessionReader.PAGE_MESSAGES`），滚到顶会
- * 自动往前补一页。这一条既是提示（上面不是没有内容，而是还没取），也是状态
+ * 恢复一条会话时只读最近 [com.zhizhu.zhicode.compose.data.SessionReader.PAGE_MESSAGES] 条，
+ * 往下有两种补页方式：**顶部下拉**（Miuix `PullToRefresh`，见 `ChatList`）与
+ * **滚到顶自动补**。这一条既是提示（上面不是没有内容，而是还没取），也是状态
  * （正在取），否则用户滚到顶只会看到内容突然停住，像是记录缺了一块。
  */
 @Composable
 fun OlderLoader(loading: Boolean) {
     val scheme = MiuixTheme.colorScheme
+    // 文案里写出**具体条数**：只说"更早的消息"时用户不知道一次补多少，
+    // 也就无法判断"要不要为了找某一条一直往下拉"。
+    val count = com.zhizhu.zhicode.compose.data.SessionReader.PAGE_MESSAGES
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, end = 14.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = if (loading) "正在加载更早的消息…" else "上面还有更早的消息",
+            text = if (loading) "正在加载更早的 $count 条…" else "下拉或继续上滑，加载更早的 $count 条",
             color = scheme.onBackgroundVariant,
             fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+        )
+    }
+}
+
+/**
+ * 「已经到会话开头」的终点提示。
+ *
+ * 没有它时，用户滚到顶会看到 `OlderLoader` **消失**——而那与「这一页刚好到头」
+ * 长得一模一样，于是会反复下拉确认。一条两行的终点说明比"什么都没有"便宜得多。
+ */
+@Composable
+fun TranscriptStartHint() {
+    val scheme = MiuixTheme.colorScheme
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp, end = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = "已经到会话开头",
+            color = scheme.onBackgroundVariant,
+            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
         )
     }
 }
@@ -1223,9 +1248,36 @@ private fun RunningPanel(activity: ToolActivity, nowMs: Long, isCommand: Boolean
             ) {
                 // 7×7 的圆点：运行中是强调色，等授权时变灰（"停住了"）。
                 // 用 Box + background 而不是字符 ●，理由与状态字形一致：字形依赖字体。
+                //
+                // 运行中额外做**呼吸**（alpha 在 0.45~1 之间往返）。这不是装饰：
+                // 命令安静下来时屏幕上唯一能证明"还活着"的就是它在动 ——
+                // 耗时那一栏每 500ms 才刷新一次，而呼吸是每帧的。
+                //
+                // ⚠️ 呼吸只改 `graphicsLayer.alpha`（绘制期属性），
+                // 不触发重组也不触发布局 —— 这是本组件里唯一一处"持续动画"，
+                // 用错了就会让整条工具行每帧重组。
+                //
+                // 等授权时**不呼吸**而是恒亮：那时"停住了"本身就是要传达的信息，
+                // 让它继续脉动会读成"还在跑，只是没输出"。
+                val dotAlpha = if (activity.awaitingPermission) {
+                    1f
+                } else {
+                    val breath = rememberInfiniteTransition(label = "runningDot")
+                    val value by breath.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 0.45f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(900, easing = SinOutEasing),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "runningDotAlpha",
+                    )
+                    value
+                }
                 Box(
                     modifier = Modifier
                         .size(7.dp)
+                        .graphicsLayer { alpha = dotAlpha }
                         .background(
                             color = if (activity.awaitingPermission) scheme.onSurfaceVariantSummary else scheme.primary,
                             shape = RoundedCornerShape(4.dp),
@@ -1266,6 +1318,11 @@ private fun RunningPanel(activity: ToolActivity, nowMs: Long, isCommand: Boolean
             val body = if (live.isNotEmpty()) live
             else if (activity.awaitingPermission) "等待授权…"
             else "等待程序输出…"
+            // 实时输出区：**只在有内容时**做高度过渡。
+            //
+            // `animateContentSize` 挂在这一层（单条卡片内部），不是整表 ——
+            // 整表上的高度动画会让 LazyColumn 每帧重新测量所有可见项。
+            // 这里的目的只是"输出从 1 行涨到 12 行时不硬跳"。
             Text(
                 text = body,
                 color = scheme.onSurfaceVariantSummary,
@@ -1276,7 +1333,9 @@ private fun RunningPanel(activity: ToolActivity, nowMs: Long, isCommand: Boolean
                 // 用途只是"看见它在动"。
                 maxLines = 12,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 6.dp),
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .animateContentSize(ZhiMotion.sizeSpec),
             )
         }
     }
