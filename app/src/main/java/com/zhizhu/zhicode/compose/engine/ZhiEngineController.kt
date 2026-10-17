@@ -61,6 +61,8 @@ internal data class EngineOverrides(
     /** 当前生效搜索服务的每服务选项（JSON，如 depth/topic/language）。 */
     val webSearchServiceConfig: String? = null,
     val rootExecutionEnabled: Boolean? = null,
+    /** Shizuku 工具开关。与 Root 独立：它的前提是「用过 adb 启动过 Shizuku」，不是「设备 root」。 */
+    val shizukuExecutionEnabled: Boolean? = null,
     val sandboxAgentFullAccess: Boolean? = null,
     val forcedKeepAliveEnabled: Boolean? = null,
 )
@@ -254,6 +256,7 @@ internal class ZhiEngineController(
         config.webSearchEnabled.toString(), config.webSearchProvider,
         config.webSearchMaxResults.toString(), config.webTimeoutMs.toString(),
         config.rootExecutionEnabled.toString(), config.sandboxAgentFullAccess.toString(),
+        config.shizukuExecutionEnabled.toString(),
         config.forcedKeepAliveEnabled.toString(), config.workflowId,
     ).joinToString("\u0000")
 
@@ -971,6 +974,7 @@ internal fun applyEngineOverrides(config: SessionConfig, o: EngineOverrides) {
     // 空串也要写：用户在设置里清掉地址/选项之后，引擎侧不该继续用旧值。
     o.webSearchServiceConfig?.let { config.webSearchServiceConfig = it }
     o.rootExecutionEnabled?.let { config.rootExecutionEnabled = it }
+    o.shizukuExecutionEnabled?.let { config.shizukuExecutionEnabled = it }
     o.sandboxAgentFullAccess?.let { config.sandboxAgentFullAccess = it }
     o.forcedKeepAliveEnabled?.let { config.forcedKeepAliveEnabled = it }
     o.roleCard?.let { config.roleCard = it }
@@ -1010,6 +1014,7 @@ internal fun readEngineSettings(store: ApiSettingsStore): EngineOverrides? =
             webSearchBaseUrl = config.webSearchBaseUrl,
             webSearchServiceConfig = config.webSearchServiceConfig,
             rootExecutionEnabled = config.rootExecutionEnabled,
+            shizukuExecutionEnabled = config.shizukuExecutionEnabled,
             sandboxAgentFullAccess = config.sandboxAgentFullAccess,
             forcedKeepAliveEnabled = config.forcedKeepAliveEnabled,
         )

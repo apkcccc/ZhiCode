@@ -33,6 +33,7 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 | 会话与任务 | `SessionStore`（写 SQLite 单库 `~/.zhicode/sessions.db`）、`TaskStore`、`PlanStore` |
 | 编辑器 | 独立 `EditorActivity`（独立进程 `:editor`）+ Rosemoe Sora Editor + TextMate 语法高亮 |
 | 权限门控 | `PermissionGate` / `PermissionModePolicy` / `RiskClassifier`，模式可在设置页与输入器页脚切换（见 [`SECURITY.md`](SECURITY.md)） |
+| shell 身份 | `com/zhizhu/zhicode/shizuku/` + `tools/ShizukuBashTool`：经 [Shizuku](https://github.com/RikkaApps/Shizuku) 以 uid 2000 跑 `pm/am/settings/dumpsys/input` 这类系统命令，**不需要设备 root**；开关默认关闭，命令执行前校验真实 uid |
 
 顶层模块：
 
@@ -48,6 +49,8 @@ Java 编写的 Agent 引擎与协议层，应用内自带一套 Termux 用户空
 ## 2. 明确未做 / 已知限制
 
 - **没有悬浮球、也没有 Frida / Debug 的图形面板** —— 调试走内置命令 `zhisandbox` / `zhidebug` 与 Agent 的 Debug 工具。
+- **Shizuku 要先自己装、自己启动**：本工程只做授权与调用，不打包 Shizuku 管理端，也不能替你启动它的服务。
+  没装或服务没起来时，`/shizuku status` 与设置里的那一行会如实说明卡在哪一步，工具本身不会假装成功。
 - **没有原版 IQ Code 的三套自定义调色板** —— 界面统一走 Miuix 原生主题，跟随系统深浅色；
   本工程自己的语义色在 `theme/` 的 `ZhiColors` 里（成功/失败/警示与层级色）。
 - **不做 iOS / 桌面端**。

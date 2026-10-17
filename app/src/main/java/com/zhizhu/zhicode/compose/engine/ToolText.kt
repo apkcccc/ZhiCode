@@ -53,11 +53,13 @@ internal object ToolText {
 
     // ---------- 工具名与摘要 ----------
 
-    /** 行首的大字。只有 6 个中文映射，其余原样返回英文名。 */
+    /** 行首的大字。只有 7 个中文映射，其余原样返回英文名。 */
     fun userFacingName(name: String?): String {
         if (name == null) return "Tool"
         return when (name.lowercase(Locale.US)) {
             "root" -> "Root 命令"
+            // shell 身份与 root 是两回事（uid 2000 vs 0），所以名字也不能共用。
+            "shizuku" -> "Shizuku 命令"
             "edit", "multiedit" -> "修改文件"
             "write" -> "写入文件"
             "read" -> "读取文件"
@@ -233,7 +235,8 @@ internal object ToolText {
     fun compactResult(name: String?, result: String?, exitCode: Int): String {
         val text = result ?: ""
         val lines = if (text.isEmpty()) 0 else text.split('\n').size
-        val isShell = name != null && (name.equals("Bash", true) || name.equals("Root", true))
+        val isShell = name != null && (name.equals("Bash", true) || name.equals("Root", true)
+            || name.equals("Shizuku", true))
         if (isShell && exitCode != 0) {
             val firstLine = text.split('\n').firstOrNull { it.isNotBlank() }?.trim() ?: ""
             val why = if (firstLine.isEmpty()) "" else " · " + shorten(firstLine, 105)

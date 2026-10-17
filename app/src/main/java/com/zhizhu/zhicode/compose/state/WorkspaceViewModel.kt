@@ -30,6 +30,9 @@ import com.zhizhu.zhicode.compose.engine.EngineOverrides
 import com.zhizhu.zhicode.compose.engine.EnginePlanApproval
 import com.zhizhu.zhicode.compose.engine.ZhiEngineController
 import com.zhizhu.zhicode.compose.engine.ToolText
+// Shizuku 状态查询：斜杠命令与设置页都要报「授权到了哪一步」，
+// 两处读的必须是同一个来源（Shizuku 服务的 Binder），否则显示会互相矛盾。
+import com.zhizhu.zhicode.shizuku.ShizukuBridge
 import com.zhizhu.zhicode.compose.engine.applyEngineOverrides
 import com.zhizhu.zhicode.compose.engine.engineEffortToUi
 import com.zhizhu.zhicode.compose.engine.engineModeToUi
@@ -1983,6 +1986,7 @@ class WorkspaceViewModel(
                 runCatching { org.json.JSONObject(config.toMap()).toString() }.getOrDefault("")
             } ?: "",
             rootExecutionEnabled = s.settings.rootExecutionEnabled,
+            shizukuExecutionEnabled = s.settings.shizukuExecutionEnabled,
             sandboxAgentFullAccess = s.settings.sandboxAgentFullAccess,
             forcedKeepAliveEnabled = s.settings.forcedKeepAliveEnabled,
             model = modelOverride,
@@ -2833,12 +2837,13 @@ class WorkspaceViewModel(
         "Grep", "Glob", "Search" -> ToolKind.SEARCH
         "Read", "ReadMany", "LS", "List", "Tree", "Stat" -> ToolKind.READ
         "Edit", "MultiEdit", "Write", "Move", "Delete", "Mkdir", "Copy" -> ToolKind.EDIT
-        "Bash", "Root", "BashTool" -> ToolKind.COMMAND
+        "Bash", "Root", "Shizuku", "BashTool" -> ToolKind.COMMAND
         else -> ToolKind.OTHER
     }
 
     private fun subtitleFor(tool: String): String = when (tool) {
         "Root" -> "高风险：智蛛请求以 Android uid 0 执行系统命令"
+        "Shizuku" -> "智蛛请求以 shell 身份（uid 2000）执行 Android 系统命令"
         "Bash" -> "智蛛请求在本地 Termux 环境中执行以下命令"
         "AndroidIntent" -> "智蛛请求通过 Android 应用进程打开手机 App、网页或系统页面"
         "Write", "Edit", "MultiEdit" -> "智蛛请求修改项目中的文件"
@@ -2900,6 +2905,7 @@ class WorkspaceViewModel(
             "/sandbox" -> openSandbox()
 
             "/web" -> handleWebSlash(arg)
+            "/shizuku" -> handleShizukuSlash(arg)
 
             "/context" -> {
                 if (arg.isEmpty()) {
@@ -3051,6 +3057,63 @@ class WorkspaceViewModel(
             )
         }
         // 立刻下发：这一步容易漏，漏了就会"开关看起来变了，但下一轮请求还用旧值"。
+        runCatching { engine.configure(engineOverrides()) }
+    }
+
+    /**
+     * `/shizuku`：Agent Shizuku（无 Root 的 shell 身份）。
+     *
+     * 四种形态与原版的 `handleShizukuSlash` 一致：无参数 → 打开设置里的那一组，
+     * `on` / `off` → 开关（真的落盘并重配引擎），`status` → 报告状态。
+     *
+     * <h3>为什么 status 要同时报两件事</h3>
+     * 「工具开关」与「Shizuku 授权」是**两个独立的前提**：开着工具但没授权，
+     * 模型一调用就会收到一条授权错误；只报其中一个，用户会以为另一半已经好了。
+     */
+    private fun handleShizukuSlash(arg: String) {
+        when {
+            arg.isEmpty() -> {
+                openSettings()
+                _state.update { it.copy(settingsDraft = it.settingsDraft?.copy(category = SettingsCategory.AGENT_SECURITY)) }
+            }
+            arg.equals("on", ignoreCase = true) || arg.equals("enable", ignoreCase = true) ->
+                setShizukuExecution(true)
+            arg.equals("off", ignoreCase = true) || arg.equals("disable", ignoreCase = true) ->
+                setShizukuExecution(false)
+            else -> {
+                val state = ShizukuBridge.state(getApplication())
+                val enabled = _state.value.settings.shizukuExecutionEnabled
+                _state.update {
+                    it.copy(
+                        message = "Shizuku ${ShizukuBridge.stateLabel(getApplication())}"
+                            + if (enabled) "；Agent 可用" else "；Agent 不可用（/shizuku on 开启）",
+                        messageIsError = enabled && state != ShizukuBridge.GRANTED,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 开关 Shizuku 工具，并**立刻**落盘 + 重配引擎。
+     *
+     * 直接用 [applySettingsDraft]：它既是设置页那套自动保存的入口，
+     * 也就顺带保证了「斜杠命令改的值」与「设置页改的值」走同一条持久化路径 ——
+     * 两条各自写盘的话，后写的那条会把另一条的新值冲掉。
+     */
+    fun setShizukuExecution(enabled: Boolean) {
+        val draft = _state.value.settingsDraft ?: SettingsDraft.from(_state.value)
+        applySettingsDraft(draft.copy(shizukuExecutionEnabled = enabled))
+        val granted = ShizukuBridge.state(getApplication()) == ShizukuBridge.GRANTED
+        _state.update {
+            it.copy(
+                message = when {
+                    !enabled -> "Agent Shizuku 已关闭"
+                    granted -> "Agent Shizuku 已开启（shell 身份已授权）"
+                    else -> "Agent Shizuku 已开启；还需要在 设置 → Agent 与安全 里授权"
+                },
+            )
+        }
         runCatching { engine.configure(engineOverrides()) }
     }
 
@@ -4041,6 +4104,7 @@ class WorkspaceViewModel(
                     webSearchSearxngUrl = o.webSearchBaseUrl ?: s.settings.webSearchSearxngUrl,
                     sandboxAgentFullAccess = o.sandboxAgentFullAccess ?: s.settings.sandboxAgentFullAccess,
                     rootExecutionEnabled = o.rootExecutionEnabled ?: s.settings.rootExecutionEnabled,
+                    shizukuExecutionEnabled = o.shizukuExecutionEnabled ?: s.settings.shizukuExecutionEnabled,
                     forcedKeepAliveEnabled = o.forcedKeepAliveEnabled ?: s.settings.forcedKeepAliveEnabled,
                 ),
                 // 设置页若已经开着（正常不会，这一步在启动路径上），草稿也要跟着对齐，
@@ -4062,6 +4126,7 @@ class WorkspaceViewModel(
                         webSearchSearxngUrl = o.webSearchBaseUrl ?: draft.webSearchSearxngUrl,
                         sandboxAgentFullAccess = o.sandboxAgentFullAccess ?: draft.sandboxAgentFullAccess,
                         rootExecutionEnabled = o.rootExecutionEnabled ?: draft.rootExecutionEnabled,
+                        shizukuExecutionEnabled = o.shizukuExecutionEnabled ?: draft.shizukuExecutionEnabled,
                         forcedKeepAliveEnabled = o.forcedKeepAliveEnabled ?: draft.forcedKeepAliveEnabled,
                     )
                 },

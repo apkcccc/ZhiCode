@@ -964,6 +964,8 @@ data class AppSettings(
     val visionEnabled: Boolean = true,
     val sandboxAgentFullAccess: Boolean = false,
     val rootExecutionEnabled: Boolean = false,
+    /** Shizuku 工具开关：以 shell 身份（uid 2000）跑 pm/am/dumpsys 这类系统命令。与 Root 独立。 */
+    val shizukuExecutionEnabled: Boolean = false,
     val forcedKeepAliveEnabled: Boolean = false,
     /** 终端强制字符模式输入（默认关：走正常软件输入法）。见 ApiSettingsStore。 */
     val terminalCharMode: Boolean = false,
@@ -1071,6 +1073,7 @@ data class SettingsDraft(
     val terminalCharMode: Boolean,
     val webSearchEnabled: Boolean,
     val webSearchProvider: WebSearchProvider,
+    val shizukuExecutionEnabled: Boolean,
     val webSearchMaxResults: Int,
     val webSearchTimeoutSec: Int,
     val webSearchKeys: Map<WebSearchProvider, String>,
@@ -1095,6 +1098,7 @@ data class SettingsDraft(
                 visionEnabled = s.visionEnabled,
                 sandboxAgentFullAccess = s.sandboxAgentFullAccess,
                 rootExecutionEnabled = s.rootExecutionEnabled,
+                shizukuExecutionEnabled = s.shizukuExecutionEnabled,
                 forcedKeepAliveEnabled = s.forcedKeepAliveEnabled,
                 terminalCharMode = s.terminalCharMode,
                 webSearchEnabled = s.webSearchEnabled,
@@ -1127,6 +1131,7 @@ data class SettingsDraft(
             visionEnabled = visionEnabled,
             sandboxAgentFullAccess = sandboxAgentFullAccess,
             rootExecutionEnabled = rootExecutionEnabled,
+            shizukuExecutionEnabled = shizukuExecutionEnabled,
             forcedKeepAliveEnabled = forcedKeepAliveEnabled,
             terminalCharMode = terminalCharMode,
             webSearchEnabled = webSearchEnabled,

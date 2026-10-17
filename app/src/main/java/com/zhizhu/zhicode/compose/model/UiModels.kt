@@ -899,6 +899,7 @@ val SLASH_COMMANDS: List<SlashCommand> = listOf(
     SlashCommand("/effort", "设置推理强度"),
     SlashCommand("/permissions", "设置工具调用权限模式"),
     SlashCommand("/root", "Agent Root：on / off / check"),
+    SlashCommand("/shizuku", "Agent Shizuku（无 Root 的 shell 身份）：on / off / status"),
     SlashCommand("/keepalive", "强制后台保活：on / off / check"),
     SlashCommand("/mcp", "配置和管理 MCP 服务器；/mcp list · add · enable · disable · remove <名称>"),
     SlashCommand("/web", "联网搜索设置；也可直接输入 /web 搜索词"),

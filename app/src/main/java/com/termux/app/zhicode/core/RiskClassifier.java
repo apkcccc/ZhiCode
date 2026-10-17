@@ -111,6 +111,10 @@ public final class RiskClassifier {
             case "rootbash":
                 // 这个工具本身就是「以 root 跑」，没有温和的用法。
                 return true;
+            case "shizuku":
+                // shell 身份不是 root，判据与 Bash 同一套（看命令干了什么），
+                // 而不是一律红标 —— 否则「dumpsys 看一眼」和「pm uninstall」会被画成同一件事。
+                return isRiskyCommand(in.optString("command", ""));
             case "delete":
             case "del":
                 // 递归删目录。单文件删除仍走普通确认。

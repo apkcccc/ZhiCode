@@ -157,6 +157,28 @@
             android:grantUriPermissions="true" />
 
         <!--
+          Shizuku（https://github.com/RikkaApps/Shizuku）的授权通道。
+
+          Shizuku 由用户通过 adb 或 Root 启动一个 shell 身份（uid 2000，Root 启动时是 0）
+          的进程，再把它的 Binder 交给本应用 —— 于是「跑 pm/am/dumpsys/input 这类系统命令」
+          不必让整台设备 root。这个 provider 就是管理端（含 Sui）投递 Binder 的入口，
+          **不声明它，Shizuku.pingBinder() 永远是 false**。
+
+          android:permission=INTERACT_ACROSS_USERS_FULL 是签名级权限：
+          只有系统进程与 Shizuku 自身持有，第三方应用调不到，所以这里 exported 放为 true
+          也不会把服务暴露出去（真正的访问控制由那一行权限完成）。
+          android:multiprocess=false 让 provider 只活在主进程 —— 引擎与授权状态都在主进程，
+          多一份副本意味着 pingBinder 的结论可能来自另一个进程。
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!--
           把 HOME 发布给系统文件管理器（DocumentsUI / 系统「文件」/「选择文件」）。
 
           为什么需要它：HOME 在应用私有目录里（0700 + SELinux），第三方文件管理器

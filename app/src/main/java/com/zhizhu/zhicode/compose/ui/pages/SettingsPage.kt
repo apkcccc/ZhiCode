@@ -51,6 +51,7 @@ import com.zhizhu.zhicode.compose.ui.settings.SettingsIntField
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPlateColors
 import com.zhizhu.zhicode.compose.ui.settings.SettingsTextField
 import com.zhizhu.zhicode.compose.ui.settings.SettingsToggle
+import com.zhizhu.zhicode.compose.ui.settings.ShizukuAccessRow
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.VerticalScrollBar
@@ -303,6 +304,27 @@ private fun AgentSecurityPage(draft: SettingsDraft, onChange: (SettingsDraft) ->
         icon = ZhiIcons.terminal,
         plate = SettingsPlateColors.red,
     )
+
+    /*
+     * Shizuku：不 root 也能拿到 shell 身份（uid 2000）。
+     *
+     * 与 Root 并列而不是合并：两者的**前提条件完全不同** —— Root 要设备真的 root 了，
+     * Shizuku 只要用户用 adb 启动过一次它的服务。合并成一个"提权"开关，
+     * 会让「我有 Shizuku 没有 root」和「我有 root 没装 Shizuku」两种人都少一半能力。
+     *
+     * 下面那一行是授权入口，不是装饰：开关只决定模型能不能看见工具，
+     * 能不能真的跑取决于 Shizuku 那边的授权。
+     */
+    SettingsToggle(
+        title = "Agent Shizuku 权限",
+        checked = draft.shizukuExecutionEnabled,
+        onCheckedChange = { onChange(draft.copy(shizukuExecutionEnabled = it)) },
+        summary = "无 Root 的 shell 身份：pm/am/settings/dumpsys/input 这类系统命令；普通模式仍逐次确认",
+        warn = true,
+        icon = ZhiIcons.terminal,
+        plate = SettingsPlateColors.green,
+    )
+    ShizukuAccessRow()
 
     SettingsToggle(
         title = "强制后台保活",

@@ -550,6 +550,7 @@ public final class ZhiCodeEngine {
                     .put("permission_mode", current.permissionMode)
                     .put("sandbox_agent_full_access", current.sandboxAgentFullAccess)
                     .put("root_execution_enabled", current.rootExecutionEnabled)
+                    .put("shizuku_execution_enabled", current.shizukuExecutionEnabled)
                     .put("project", current.projectDirectory)
                     .put("workflow_id", current.workflowId));
         } catch (Exception ignored) {
@@ -1731,6 +1732,10 @@ public final class ZhiCodeEngine {
                     && (executionConfig == null || !executionConfig.rootExecutionEnabled)) {
                 return ToolExecutionResult.error("Root tool is disabled in ZhiCode settings");
             }
+            if ("Shizuku".equals(call.name)
+                    && (executionConfig == null || !executionConfig.shizukuExecutionEnabled)) {
+                return ToolExecutionResult.error("Shizuku tool is disabled in ZhiCode settings");
+            }
             ZhiTool tool = tools.get(call.name);
             if (tool == null) return ToolExecutionResult.error("Unknown tool: " + call.name);
 
@@ -2497,6 +2502,7 @@ public final class ZhiCodeEngine {
         SessionConfig current = config;
         String key = current == null ? "" : current.permissionMode + "\u0000"
                 + current.webSearchEnabled + "\u0000" + current.rootExecutionEnabled
+                + "\u0000" + current.shizukuExecutionEnabled
                 + "\u0000" + (allowedTools == null ? "*" : allowedTools.toString())
                 + "\u0000" + subagentMode;
         if (cachedToolSchemas != null && key.equals(cachedToolSchemasKey)) {
@@ -2524,6 +2530,7 @@ public final class ZhiCodeEngine {
         boolean webTool = "WebSearch".equals(name) || "WebFetch".equals(name);
         if (webTool && current != null && !current.webSearchEnabled) return true;
         if ("Root".equals(name) && (current == null || !current.rootExecutionEnabled)) return true;
+        if ("Shizuku".equals(name) && (current == null || !current.shizukuExecutionEnabled)) return true;
         return !isToolAllowed(name);
     }
 

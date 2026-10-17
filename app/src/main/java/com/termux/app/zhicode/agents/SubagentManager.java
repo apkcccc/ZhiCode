@@ -106,7 +106,7 @@ public final class SubagentManager {
      * 一个已经删掉的工具名不该让整份定义失效。
      */
     private static final String[] SUBAGENT_TOOLS = {
-            "Bash", "Root", "Sandbox", "GitStatus", "TermuxDoctor", "TermuxRepair",
+            "Bash", "Root", "Shizuku", "Sandbox", "GitStatus", "TermuxDoctor", "TermuxRepair",
             "EnterWorktree", "ExitWorktree", "Read", "ReadMany", "Stat", "Tree",
             "Write", "Copy", "Edit", "MultiEdit", "Mkdir", "Move", "Delete",
             "Glob", "Grep", "LS", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate",

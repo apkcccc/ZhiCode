@@ -176,6 +176,21 @@ if (configuredApplicationId == null || configuredApplicationId.isEmpty()) {
 dependencies {
     // IQ 沙箱（BlackBox 虚拟 Android 运行时宿主）—— Phase 7
     implementation project(':Bcore')
+
+    /*
+     * Shizuku（https://github.com/RikkaApps/Shizuku）：无 Root 的 shell 身份。
+     *
+     * api 提供 `rikka.shizuku.Shizuku`（授权申请与状态查询），并**传递依赖**
+     * `dev.rikka.shizuku:aidl` —— 后者才是 `moe.shizuku.server.IShizukuService`
+     * 与 `IRemoteProcess` 的实现类（AIDL 生成的 Stub/Proxy）。
+     * 少了 aidl 这一层，`newProcess` 根本无从调用：api 里的
+     * `ShizukuRemoteProcess` 构造器是包级私有的，只能由 `IRemoteProcess` 构造。
+     *
+     * provider 提供 `rikka.shizuku.ShizukuProvider`：管理端通过它把 shell 服务的
+     * Binder 递给我们，必须在清单里声明同名条目才生效。
+     */
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
     implementation 'androidx.activity:activity-compose:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.9.4'

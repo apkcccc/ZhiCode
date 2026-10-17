@@ -175,6 +175,25 @@ public final class SystemPromptBuilder {
         "Agent Root is disabled, so no superuser tool is available. Do not claim or attempt root execution "
             + "through ordinary Bash.\n";
 
+    /**
+     * Shizuku 开/关。
+     *
+     * <p>为什么必须单独一段，而不能并进 Root 那句：两者**能力有交集、前提完全不同**。
+     * Shizuku 不要求设备 root，但要求用户用过 adb（或 root）启动管理端服务；
+     * 写成「有 root 就能用 Shizuku」会把模型引到一条实际走不通的路上，
+     * 反过来写成「有 Shizuku 就是 root」更糟 —— 那会让它声称改动了系统文件。
+     */
+    private static final String SHIZUKU_ENABLED =
+        "Agent Shizuku is enabled. The Shizuku tool runs commands as the Android shell user (uid 2000, or "
+            + "uid 0 when Shizuku itself was started with root); its real uid is verified before every command. "
+            + "Use it for pm/am/settings/cmd/dumpsys/input/screencap work that the app-uid Bash cannot do, and "
+            + "keep ordinary file work in Bash.\n";
+
+    /** 关掉时同样在纠正行为：没有 shell 身份就别声称装包/改系统设置成功了。 */
+    private static final String SHIZUKU_DISABLED =
+        "Agent Shizuku is disabled, so no shell-identity tool is available. Do not claim to install packages, "
+            + "change system settings or run adb-shell-only commands; say what the app-uid Bash actually did.\n";
+
     private SystemPromptBuilder() {}
 
     public static String build(SessionConfig config) {
@@ -189,6 +208,7 @@ public final class SystemPromptBuilder {
         StringBuilder prompt = new StringBuilder();
         prompt.append(identityAndEnvironment(config));
         prompt.append(rootCapability(config));
+        prompt.append(shizukuCapability(config));
         // 一个空行分隔「权限状态」与「规则清单」。
         prompt.append("\n");
         prompt.append(rules());
@@ -215,6 +235,10 @@ public final class SystemPromptBuilder {
 
     private static String rootCapability(SessionConfig config) {
         return config.rootExecutionEnabled ? ROOT_ENABLED : ROOT_DISABLED;
+    }
+
+    private static String shizukuCapability(SessionConfig config) {
+        return config.shizukuExecutionEnabled ? SHIZUKU_ENABLED : SHIZUKU_DISABLED;
     }
 
     /** 规则清单：逐条加 {@code "- "} 前缀，整段以换行结尾。 */

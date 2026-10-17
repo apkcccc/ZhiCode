@@ -91,6 +91,8 @@ public final class ApiSettingsStore {
         static final String PERMISSION_MODE = "permission_mode";
         static final String SANDBOX_FULL_ACCESS = "sandbox_agent_full_access";
         static final String ROOT_EXECUTION = "root_execution_enabled";
+        /** Shizuku 工具开关。与 Root 分开存：两者的前提条件不同，不能互相隐含。 */
+        static final String SHIZUKU_EXECUTION = "shizuku_execution_enabled";
         static final String FORCED_KEEP_ALIVE = "forced_keep_alive_enabled";
         /** 终端是否强制字符模式输入（见 getTerminalCharMode 的说明）。 */
         static final String TERMINAL_CHAR_MODE = "terminal_char_mode";
@@ -224,6 +226,8 @@ public final class ApiSettingsStore {
                 item(c -> c.sandboxAgentFullAccess, (c, v) -> c.sandboxAgentFullAccess = (Boolean) v));
         SETTINGS.put(Key.ROOT_EXECUTION,
                 item(c -> c.rootExecutionEnabled, (c, v) -> c.rootExecutionEnabled = (Boolean) v));
+        SETTINGS.put(Key.SHIZUKU_EXECUTION,
+                item(c -> c.shizukuExecutionEnabled, (c, v) -> c.shizukuExecutionEnabled = (Boolean) v));
         SETTINGS.put(Key.FORCED_KEEP_ALIVE,
                 item(c -> c.forcedKeepAliveEnabled, (c, v) -> c.forcedKeepAliveEnabled = (Boolean) v));
         SETTINGS.put(Key.PROJECT_DIRECTORY,

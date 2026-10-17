@@ -87,6 +87,14 @@ public final class SessionConfig {
     public boolean sandboxAgentFullAccess = true;
     /** 打开 Root 工具入口。命令仍然需要真实的 su 授权。 */
     public boolean rootExecutionEnabled = false;
+    /**
+     * 打开 Shizuku 工具入口：以 shell 身份（uid 2000，Root 启动的 Shizuku 是 0）跑系统命令。
+     *
+     * <p>与 {@link #rootExecutionEnabled} 是**两个独立开关**：它们的能力有交集（都能跑
+     * {@code pm}/{@code am}），但门槛完全不同 —— Root 要设备真的 root 了，
+     * Shizuku 只要用户用 adb 启动过一次它的服务。所以谁都不该隐含另一个。
+     */
+    public boolean shizukuExecutionEnabled = false;
     /** 用户显式开启的常驻前台服务。 */
     public boolean forcedKeepAliveEnabled = false;
 
@@ -181,6 +189,7 @@ public final class SessionConfig {
         copy.planWorkflowState = snapshotPlanWorkflowState();
         copy.sandboxAgentFullAccess = sandboxAgentFullAccess;
         copy.rootExecutionEnabled = rootExecutionEnabled;
+        copy.shizukuExecutionEnabled = shizukuExecutionEnabled;
         copy.forcedKeepAliveEnabled = forcedKeepAliveEnabled;
 
         copy.projectDirectory = projectDirectory;

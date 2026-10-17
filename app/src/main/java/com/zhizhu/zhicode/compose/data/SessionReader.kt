@@ -585,7 +585,7 @@ internal object SessionReader {
         "Grep", "Glob", "Search" -> ToolKind.SEARCH
         "Read", "ReadMany", "LS", "List", "Tree", "Stat" -> ToolKind.READ
         "Edit", "MultiEdit", "Write", "Move", "Delete", "Mkdir", "Copy" -> ToolKind.EDIT
-        "Bash", "Root", "BashTool" -> ToolKind.COMMAND
+        "Bash", "Root", "Shizuku", "BashTool" -> ToolKind.COMMAND
         else -> ToolKind.OTHER
     }
 

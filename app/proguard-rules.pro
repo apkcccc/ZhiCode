@@ -83,3 +83,31 @@
 -dontwarn top.niunaijun.blackbox.**
 -dontwarn top.niunaijun.blackreflection.**
 -dontwarn top.niunaijun.jnihook.**
+
+
+# ---------------------------------------------------------------------------
+# 5) Shizuku（无 Root 的 shell 身份）
+# ---------------------------------------------------------------------------
+#
+# 这一段是**必须**的，而且理由不是"以防万一"：
+#
+# 1) `moe.shizuku.server.*` 是 AIDL 生成的 Stub/Proxy。我们调用的是
+#    `IShizukuService.Stub.asInterface(binder)`，而它在**对端**（Shizuku 服务进程）
+#    才展开成 onTransact 分派。Binder 的分派靠 `Parcel` 里的接口描述符字符串，
+#    那个字符串是编译期常量、不会被改名 —— 但只要 R8 把 `Stub` 本身裁掉或改名，
+#    我们这侧就没有可用的代理类，`getVersion()`/`newProcess()` 会直接
+#    NoSuchMethodError。这两个类是本工具唯一的执行通路，体积只有几 KB。
+#
+# 2) `rikka.shizuku.ShizukuProvider` 由**系统**按名字实例化（清单里那条 provider），
+#    R8 看不到任何 Java 调用点。AGP 通常会替清单组件自动加 keep，但那条规则
+#    覆盖的是"清单里出现的组件类"，而 provider 内部还会反射回调
+#    `Shizuku.onBinderReceived(...)`，这一层没有任何静态引用。
+#
+# 3) `Shizuku` 自己用反射读隐藏的 `android.os.SystemProperties`（见
+#    `ShizukuSystemProperties`），并在 API 11 之前的版本上走另一条
+#    Parcel 手写路径；这些都只按名字发生，静态分析看不到。
+#
+# 结论：把这两个包整体钉住。它们是第三方库的外壳（不是我们的业务代码），
+# 总量在 30KB 量级，换的是"打开 R8 之后工具仍然可用"。
+-keep class moe.shizuku.** { *; }
+-keep class rikka.shizuku.** { *; }

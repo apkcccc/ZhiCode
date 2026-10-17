@@ -341,7 +341,7 @@ object ZhiIcons {
         "Write", "Edit", "MultiEdit" -> vector(ZhiMaterialIcons.Edit)
         "Delete" -> vector(ZhiMaterialIcons.Delete)
         "Move" -> vector(ZhiMaterialIcons.DriveFileMove)
-        "Bash", "Root" -> vector(ZhiMaterialIcons.Terminal)
+        "Bash", "Root", "Shizuku" -> vector(ZhiMaterialIcons.Terminal)
         else -> vector(ZhiMaterialIcons.Code)
     }
 }
