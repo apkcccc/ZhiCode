@@ -405,5 +405,5 @@ Compose 界面在 `dump_ui` 里通常只呈现一个 `AndroidComposeView`，因�
   逐项清单、版权行、已知的本地修改，以及**尚未核到来源的几项**见
   [`app/src/main/assets/sora/textmate/NOTICE.md`](app/src/main/assets/sora/textmate/NOTICE.md)。
 
-> 工程名是 **ZhiCode**；界面里助手自称「**智蛛**」—— 两者不是同一件事：前者是仓库名、应用名与包名来源，
+> 工程名是 **ZhiCode**；界面里助手自称「**ZhiCode**」—— 两者不是同一件事：前者是仓库名、应用名与包名来源，
 > 后者只是界面文案里的人称。

@@ -429,7 +429,7 @@ internal object SkillStore {
         |
         |# $name
         |
-        |在这里编写给智蛛的技能说明。
+        |在这里编写给 ZhiCode 的技能说明。
         |
     """.trimMargin()
 
@@ -452,7 +452,7 @@ internal object SkillStore {
         |
         |# <技能名>
         |
-        |写给智蛛的说明：什么情况下用它、要按什么步骤做、有哪些注意事项。
+        |写给 ZhiCode 的说明：什么情况下用它、要按什么步骤做、有哪些注意事项。
         |
     """.trimMargin()
 

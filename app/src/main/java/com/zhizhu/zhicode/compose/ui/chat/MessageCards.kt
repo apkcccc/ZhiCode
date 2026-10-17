@@ -117,13 +117,13 @@ fun EmptyState() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "想让智蛛做什么？",
+            text = "想让 ZhiCode 做什么？",
             color = scheme.onBackground,
             fontSize = MiuixTheme.textStyles.title1.fontSize,
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "智蛛可以读取项目、编辑文件、运行命令，并在内置 Termux 环境中验证修改。",
+            text = "ZhiCode 可以读取项目、编辑文件、运行命令，并在内置 Termux 环境中验证修改。",
             color = scheme.onBackgroundVariant,
             fontSize = MiuixTheme.textStyles.body1.fontSize,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp),

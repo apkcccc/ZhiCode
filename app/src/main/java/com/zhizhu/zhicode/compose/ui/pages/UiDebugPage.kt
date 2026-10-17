@@ -2145,11 +2145,11 @@ private fun handleItemAction(
                 copyWithToast(context, "图片说明", entry.caption, "已复制图片说明")
         }
         is DebugItem.Msg -> when (label) {
-            "复制回复" -> copyWithToast(context, "智蛛回复", entry.item.body, "已复制")
+            "复制回复" -> copyWithToast(context, "ZhiCode 回复", entry.item.body, "已复制")
             "复制思考内容" -> copyWithToast(context, "思考内容", entry.item.thinking, "已复制")
             "复制全文（含思考）" -> copyWithToast(
                 context,
-                "智蛛回复（含思考）",
+                "ZhiCode 回复（含思考）",
                 listOf(entry.item.thinking, entry.item.body).filter { it.isNotBlank() }.joinToString("\n\n"),
                 "已复制全文",
             )

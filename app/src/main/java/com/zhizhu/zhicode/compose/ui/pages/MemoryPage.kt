@@ -116,7 +116,7 @@ private fun MemoryFileList(
     Column {
         Text(
             text = "项目级与用户级两份说明文件。写入后**不会**自动注入模型——" +
-                "「让智蛛完善」会让 Agent 读取现有说明与构建清单后直接整理 ZhiCode.md；" +
+                "「让 ZhiCode 完善」会让 Agent 读取现有说明与构建清单后直接整理 ZhiCode.md；" +
                 "平时的任务里 Agent 也可以自己用 Read 打开它。",
             color = scheme.onSurfaceVariantSummary,
             fontSize = MiuixTheme.textStyles.footnote1.fontSize,

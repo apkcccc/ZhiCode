@@ -231,7 +231,7 @@ enum class PermissionMode(val label: String, val detail: String) {
     ASK("每次询问", "每个工具调用都需要你确认"),
     ACCEPT_EDITS("自动编辑", "自动允许文件编辑，其他调用仍需确认"),
     PLAN("规划", "先产出计划，批准后再执行"),
-    AUTO("自动", "由智蛛判断哪些调用需要确认"),
+    AUTO("自动", "由 ZhiCode 判断哪些调用需要确认"),
     DONT_ASK("不询问", "不再弹出确认，高风险操作仍会提示"),
     BYPASS("跳过权限", "跳过全部权限检查，仅限受信环境"),
 }
@@ -286,6 +286,17 @@ data class PlanApproval(
 )
 
 data class ChoiceOption(val label: String, val detail: String = "", val checked: Boolean = false)
+
+/**
+ * 「自由复制」抽屉的内容。
+ *
+ * [title] 只用于抽屉顶栏（说清复制的是哪一类消息）；
+ * [text] 是**原文**，与 `copyMessage` 写进剪贴板的那一份逐字相同。
+ */
+data class CopySheetState(
+    val title: String,
+    val text: String,
+)
 
 /**
  * 通用选择器的内容。对应原版"选择"窗口。
@@ -692,6 +703,20 @@ data class WorkspaceUiState(
     val permissionRequest: PermissionRequest? = null,
     val planApproval: PlanApproval? = null,
     val choicePicker: ChoicePickerState? = null,
+    /**
+     * 「自由复制」底部抽屉的内容；null 表示关着。
+     *
+     * ## 为什么不能只靠剪贴板
+     *
+     * 长按菜单里的「复制」是把**整条**文本一次性写进剪贴板。但用户真正想要
+     * 往往是一段里的某几行（一条命令、一个报错、一段代码），而气泡里的文本
+     * 又是不可选中的（`Text` 默认不可选，卡片还要接长按手势）。所以单开一个
+     * 抽屉把**原文**摊开，让人自己划词。
+     *
+     * 内容在这里而不是在界面里：菜单回调只能拿到 `ChatItem`，抽屉要显示的那份文本
+     * 与 [WorkspaceViewModel.copyMessage] 必须**同源**，否则会出现"复制的和看到的不一样"。
+     */
+    val copySheet: CopySheetState? = null,
     val attachments: List<Attachment> = emptyList(),
     val terminalLines: List<TerminalLine> = emptyList(),
     val filePath: String = "",
@@ -889,7 +914,7 @@ data class WorkspaceUiState(
 
 /** 与上游原版 IQ Code 一致的斜杠命令表（/help 显示，面板按前缀过滤）。 */
 val SLASH_COMMANDS: List<SlashCommand> = listOf(
-    SlashCommand("/help", "查看全部智蛛指令"),
+    SlashCommand("/help", "查看全部 ZhiCode 指令"),
     SlashCommand("/compact", "模型语义压缩；可追加摘要侧重点"),
     SlashCommand("/context", "查看或设置上下文窗口，例如 /context 1m"),
     SlashCommand("/clear", "清空当前对话并开始新会话"),
@@ -912,11 +937,11 @@ val SLASH_COMMANDS: List<SlashCommand> = listOf(
     SlashCommand("/status", "查看模型、项目、上下文、运行时和会话状态"),
     SlashCommand("/stats", "查看当前会话与运行状态"),
     SlashCommand("/usage", "查看当前上下文使用情况"),
-    SlashCommand("/copy", "复制最近一条智蛛回复"),
+    SlashCommand("/copy", "复制最近一条 ZhiCode 回复"),
     SlashCommand("/plan", "进入计划模式；/plan off 退出"),
     SlashCommand("/config", "打开 ZhiCode 设置"),
     SlashCommand("/memory", "打开项目或用户 ZhiCode.md 记忆"),
-    SlashCommand("/init", "让智蛛初始化或完善项目 ZhiCode.md"),
+    SlashCommand("/init", "让 ZhiCode 初始化或完善项目 ZhiCode.md"),
     SlashCommand("/tasks", "查看 Android Agent 的任务与会话文件"),
     SlashCommand("/agents", "管理内置、项目、用户和正在运行的子 Agent"),
     SlashCommand("/cancel", "停止当前正在执行的 Agent 回合"),

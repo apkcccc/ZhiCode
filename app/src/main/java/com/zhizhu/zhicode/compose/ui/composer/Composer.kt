@@ -206,7 +206,7 @@ fun Composer(
                 ZhiTextField(
                     value = state.composerText,
                     onValueChange = onTextChange,
-                    label = "描述任务或向智蛛提问",
+                    label = "描述任务或向 ZhiCode 提问",
                     useLabelAsPlaceholder = true,
                     // 透明容器 + 透明描边：只留外层方角框
                     colors = TextFieldDefaults.textFieldColors(

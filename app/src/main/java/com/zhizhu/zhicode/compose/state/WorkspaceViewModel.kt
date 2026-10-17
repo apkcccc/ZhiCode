@@ -58,6 +58,7 @@ import com.zhizhu.zhicode.compose.model.ChatNavigation
 import com.zhizhu.zhicode.compose.model.ChoiceIntent
 import com.zhizhu.zhicode.compose.model.ChoiceOption
 import com.zhizhu.zhicode.compose.model.ChoicePickerState
+import com.zhizhu.zhicode.compose.model.CopySheetState
 import com.zhizhu.zhicode.compose.model.ExtensionSummary
 import com.zhizhu.zhicode.compose.model.EffortLevel
 import com.zhizhu.zhicode.compose.model.FileDeletePrompt
@@ -1790,12 +1791,12 @@ class WorkspaceViewModel(
      * - 对话流里放一条可见的 `/init` 用户气泡：这条请求是应用自己发的，
      *   不显示出来的话用户会看到一条自己没写过的消息引发的回复。
      */
-    /** 界面入口：记忆面板里的「让智蛛完善」按钮（`ui/dialogs/MemoryOverlay.kt`）。 */
+    /** 界面入口：记忆面板里的「让 ZhiCode 完善」按钮（`ui/dialogs/MemoryOverlay.kt`）。 */
     fun runInitFromUi() = runInitPrompt()
 
     private fun runInitPrompt() {
         if (engine.isBusy()) {
-            appendInfo("初始化项目说明", "智蛛正在执行任务，请先等待或停止当前任务。")
+            appendInfo("初始化项目说明", "ZhiCode 正在执行任务，请先等待或停止当前任务。")
             return
         }
         runCatching { engine.cancelPlanModeFromUi("/init 使用快速直接模式") }
@@ -2191,7 +2192,7 @@ class WorkspaceViewModel(
                 transcript = s.transcript + ChatItem(
                     id = id,
                     kind = ChatKind.ASSISTANT,
-                    title = "智蛛",
+                    title = "ZhiCode",
                     body = "",
                     streaming = true,
                     processSteps = listOf("开始分析请求"),
@@ -2538,7 +2539,7 @@ class WorkspaceViewModel(
                 choicePicker = ChoicePickerState(
                     title = question.optString("header", "问题"),
                     intent = ChoiceIntent.QUESTION,
-                    prompt = question.optString("question", "智蛛应该怎么做？"),
+                    prompt = question.optString("question", "ZhiCode 应该怎么做？"),
                     options = choices,
                     allowFreeForm = true,
                     freeFormHint = "其他回答…",
@@ -2575,7 +2576,7 @@ class WorkspaceViewModel(
         pendingQuestions = null
         _state.update { it.copy(choicePicker = null) }
         engine.respondQuestion(flow.requestId, JSONObject())
-        appendInfo("已跳过提问", "智蛛的提问被跳过，它会按「未选择」继续。")
+        appendInfo("已跳过提问", "ZhiCode 的提问被跳过，它会按「未选择」继续。")
     }
 
     override fun onEnginePlanApprovalRequest(request: EnginePlanApproval) {
@@ -2842,13 +2843,13 @@ class WorkspaceViewModel(
     }
 
     private fun subtitleFor(tool: String): String = when (tool) {
-        "Root" -> "高风险：智蛛请求以 Android uid 0 执行系统命令"
-        "Shizuku" -> "智蛛请求以 shell 身份（uid 2000）执行 Android 系统命令"
-        "Bash" -> "智蛛请求在本地 Termux 环境中执行以下命令"
-        "AndroidIntent" -> "智蛛请求通过 Android 应用进程打开手机 App、网页或系统页面"
-        "Write", "Edit", "MultiEdit" -> "智蛛请求修改项目中的文件"
-        "Delete" -> "智蛛请求删除项目中的文件或目录"
-        else -> "智蛛请求调用工具 $tool"
+        "Root" -> "高风险：ZhiCode 请求以 Android uid 0 执行系统命令"
+        "Shizuku" -> "ZhiCode 请求以 shell 身份（uid 2000）执行 Android 系统命令"
+        "Bash" -> "ZhiCode 请求在本地 Termux 环境中执行以下命令"
+        "AndroidIntent" -> "ZhiCode 请求通过 Android 应用进程打开手机 App、网页或系统页面"
+        "Write", "Edit", "MultiEdit" -> "ZhiCode 请求修改项目中的文件"
+        "Delete" -> "ZhiCode 请求删除项目中的文件或目录"
+        else -> "ZhiCode 请求调用工具 $tool"
     }
 
     // ---------- 斜杠命令 ----------
@@ -4664,8 +4665,8 @@ class WorkspaceViewModel(
 
     fun showMessageActions(item: ChatItem) {
         val options = when (item.kind) {
-            ChatKind.USER -> listOf("复制", "再次发送", "编辑后发送")
-            ChatKind.ASSISTANT, ChatKind.ERROR -> listOf("复制", "重试上一问")
+            ChatKind.USER -> listOf("复制", "自由复制", "再次发送", "编辑后发送")
+            ChatKind.ASSISTANT, ChatKind.ERROR -> listOf("复制", "自由复制", "重试上一问")
             // 工具组这一层只留"复制整组概要"。
             //
             // 这里曾经给第二项是 `if (item.groupCompleted) "已全部完成" else "执行中"` —— 那是
@@ -4673,7 +4674,10 @@ class WorkspaceViewModel(
             // 单个工具该有的动作（复制命令/输出/diff、展开这一条）走那一行自己的
             // `⋯` 菜单（Miuix 下拉菜单 → [applyToolAction]），只有那一行知道
             // 用户点的是哪一条。
-            else -> listOf("复制概要")
+            //
+            // 「自由复制」在这里也有意义：分组里有好几条工具时，想抄其中一条的摘要
+            // 不必先展开它，直接在抽屉里划出来就行。
+            else -> listOf("复制概要", "自由复制")
         }
         // 与 showSessionActions 同理：动作在**选择器回调**里执行，那时拿到的只有选项文案，
         // 不记住来源就会"复制了别的消息"。
@@ -4771,16 +4775,60 @@ class WorkspaceViewModel(
      * 工具组则是把各工具的标题拼起来——复制一个空串对用户毫无用处。
      */
     fun copyMessage(item: ChatItem) {
-        val text = when (item.kind) {
-            ChatKind.ASSISTANT, ChatKind.ERROR -> item.body.ifBlank { item.thinking }
-            // 工具组没有正文，把各工具的展示名与摘要拼起来——复制空串对用户没用。
-            ChatKind.TOOL_GROUP -> item.tools.joinToString("\n") { tool ->
-                listOfNotNull(tool.displayName.takeIf { it.isNotBlank() }, tool.summary.takeIf { it.isNotBlank() })
-                    .joinToString(" · ")
-            }
-            else -> item.body
+        copyText(item.copyText(), "ZhiCode 消息")
+    }
+
+    /**
+     * 一条消息对用户**可见的那份文本**。
+     *
+     * 「复制」与「自由复制」必须取同一份：前者直接写剪贴板，后者摊在抽屉里让人
+     * 自己划词。两处各写一份的话，总有一天会变成"复制的和看到的不一样"，
+     * 而那种偏差在界面上完全看不出来。
+     *
+     * 规则：助手消息取正文（没有正文时退回思考内容），工具组没有正文，
+     * 就把各工具的展示名与摘要拼起来——复制空串对用户没有任何用处。
+     */
+    private fun ChatItem.copyText(): String = when (kind) {
+        ChatKind.ASSISTANT, ChatKind.ERROR -> body.ifBlank { thinking }
+        ChatKind.TOOL_GROUP -> tools.joinToString("\n") { tool ->
+            listOfNotNull(
+                tool.displayName.takeIf { it.isNotBlank() },
+                tool.summary.takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
         }
-        copyText(text, "智蛛消息")
+        else -> body
+    }
+
+    /**
+     * 打开「自由复制」抽屉：把这条消息的原文摊开，让用户自己划词取一段。
+     *
+     * 见 [CopySheetState] 的说明：整条复制（[copyMessage]）解决不了"只要中间那三行"。
+     */
+    fun openFreeCopy(item: ChatItem) {
+        val text = item.copyText()
+        if (text.isBlank()) {
+            _state.update { it.copy(message = "这条消息没有可复制的文本", messageIsError = true) }
+            return
+        }
+        val label = when (item.kind) {
+            ChatKind.USER -> "你的消息"
+            ChatKind.ASSISTANT -> "ZhiCode 回复"
+            ChatKind.ERROR -> "错误信息"
+            ChatKind.TOOL_GROUP -> "工具调用摘要"
+            else -> "消息"
+        }
+        _state.update { it.copy(copySheet = CopySheetState(title = label, text = text)) }
+    }
+
+    fun closeCopySheet() {
+        _state.update { it.copy(copySheet = null) }
+    }
+
+    /** 抽屉里的「复制全部」：复制的是抽屉里摊开的那一份，不是重新再算一遍。 */
+    fun copySheetAll() {
+        val sheet = _state.value.copySheet ?: return
+        copyText(sheet.text, sheet.title)
+        closeCopySheet()
     }
 
     /** `/copy`：复制最近一条助手回复。 */
@@ -4792,7 +4840,7 @@ class WorkspaceViewModel(
             _state.update { it.copy(message = "还没有可复制的回复", messageIsError = true) }
             return
         }
-        copyText(latest.body, "智蛛回复")
+        copyText(latest.body, "ZhiCode 回复")
     }
 
     private fun copyText(text: String, label: String) {
@@ -4813,8 +4861,21 @@ class WorkspaceViewModel(
         // 记住操作对象：动作是在**选择器回调**里执行的，那时只能拿到选项文案，
         // 拿不到是哪条会话 —— 不记住就会出现"删掉了当前会话"这种错删。
         pendingSessionAction = session
-        val options = if (session.note.isEmpty()) listOf("重命名", "编辑备注", "恢复会话", "删除会话")
-        else listOf("重命名", "编辑备注", "清除备注", "恢复会话", "删除会话")
+        // 菜单只留**这一条会话自己的属性/命运**，也就是「重命名」与「删除会话」。
+        //
+        // 「恢复会话」（= 打开它）曾经在这里，已经删掉：点这一行本来就会打开会话，
+        // 同一个目标两条路径只会让人多犹豫一秒。
+        //
+        // 「编辑备注 / 清除备注」留着，因为它**没有别的入口** —— 备注是侧栏搜索
+        // 与行尾「· 备注」标记的来源，删掉这一项等于把那个能力废掉一半。
+        val options = buildList {
+            add("重命名")
+            add("编辑备注")
+            // 「清除备注」只在**确实有备注**时出现：否则它就是一个点了也不会有
+            // 任何变化的菜单项（备注本来已经是空的）。
+            if (session.note.isNotEmpty()) add("清除备注")
+            add("删除会话")
+        }
         _state.update {
             it.copy(
                 choicePicker = ChoicePickerState(
@@ -4969,6 +5030,8 @@ class WorkspaceViewModel(
                     // 用户点下去才知道拿到的是概要而不是某一条的完整输出。
                     "复制概要" -> copyMessage(target)
                     "复制" -> copyMessage(target)
+                    // 抽屉里摊开原文，交给自己划词。
+                    "自由复制" -> openFreeCopy(target)
                     "再次发送" -> {
                         // 复用用户消息的原文重发；工具组这类没有正文的目标不支持。
                         if (target.body.isBlank()) _state.update { it.copy(message = "这条消息没有可重发的内容", messageIsError = true) }
@@ -4995,6 +5058,8 @@ class WorkspaceViewModel(
                 } else when (option.label) {
                     "重命名" -> editSessionTitle(target)
                     "删除会话" -> deleteSession(target.id)
+                    // 「恢复会话」已经不在菜单里（点这一行就会打开）。这一支留着是为了
+                    // 兼容**旧的**待办：选择器是异步的，理论上仍可能带着老选项回来。
                     "恢复会话" -> openSession(target)
                     "编辑备注" -> editSessionNote(target)
                     "清除备注" -> saveSessionNote(target, "")

@@ -494,7 +494,7 @@ fun ChatList(
                 // 默认的淡出会让"被移除的项"在动画期间**继续绘制**，于是当
                 // `newSession()` 把 transcript 一次清空时，那几张还没淡完的卡片
                 // 会和紧接着出现的 `EmptyState()` 叠在一起 —— 表现为卡片与
-                // "想让智蛛做什么？"互相穿透、错位，看起来像渲染 bug。
+                // "想让 ZhiCode 做什么？"互相穿透、错位，看起来像渲染 bug。
                 val memberIds = when (block) {
                     is TurnLayout.Block.Standalone -> listOf(block.id)
                     is TurnLayout.Block.Turn -> block.ids

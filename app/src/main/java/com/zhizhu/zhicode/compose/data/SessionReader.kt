@@ -217,7 +217,7 @@ internal object SessionReader {
                                 ChatItem(
                                     id = id("a", rowSeq),
                                     kind = ChatKind.ASSISTANT,
-                                    title = "智蛛",
+                                    title = "ZhiCode",
                                     body = body.toString(),
                                     // 思考内容与实时流同一个上限：它**默认是折叠的**，
                                     // 截断不改变屏幕上看得见的内容，但能挡住"一条回复

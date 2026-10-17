@@ -9,6 +9,7 @@ import com.zhizhu.zhicode.compose.model.WorkspaceUiState
 import com.zhizhu.zhicode.compose.state.WorkspaceViewModel
 import com.zhizhu.zhicode.compose.ui.pages.overlays.AttachFileOverlay
 import com.zhizhu.zhicode.compose.ui.pages.overlays.ChoicePickerOverlay
+import com.zhizhu.zhicode.compose.ui.pages.overlays.CopySheetOverlay
 import com.zhizhu.zhicode.compose.ui.pages.overlays.EnvironmentOverlay
 import com.zhizhu.zhicode.compose.ui.pages.overlays.ModelPickerOverlay
 import com.zhizhu.zhicode.compose.ui.pages.overlays.PermissionOverlay
@@ -63,6 +64,14 @@ internal fun ZhiOverlayHost(
         onSubmit = viewModel::onSubmitSelection,
         onDismiss = viewModel::dismissChoicePicker,
         onSubmitFreeForm = viewModel::onSubmitFreeForm,
+    )
+    // 「自由复制」底部抽屉：把一条消息的原文摊开让人划词。
+    // 放在这里而不是对话页里，与其它浮层同处一个挂载点 —— 它同样要在
+    // Scaffold 的 popupHost 上渲染，而对话页在宽屏下只是三个面板之一。
+    CopySheetOverlay(
+        sheet = state.copySheet,
+        onDismiss = viewModel::closeCopySheet,
+        onCopyAll = viewModel::copySheetAll,
     )
     AttachFileOverlay(
         open = state.attachPickerOpen,
