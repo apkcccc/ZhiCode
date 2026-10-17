@@ -2,6 +2,7 @@ package com.zhizhu.zhicode.compose.ui.pages
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,11 +19,13 @@ import androidx.compose.ui.unit.dp
 import com.zhizhu.zhicode.compose.BuildConfig
 import com.zhizhu.zhicode.compose.model.OWN_LICENSE
 import com.zhizhu.zhicode.compose.model.PROJECT_URL
+import com.zhizhu.zhicode.compose.theme.ZhiRadius
 import com.zhizhu.zhicode.compose.ui.ZhiIcons
 import com.zhizhu.zhicode.compose.ui.settings.SettingsEntry
 import com.zhizhu.zhicode.compose.ui.settings.SettingsGroup
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPlateColors
 import com.zhizhu.zhicode.compose.ui.settings.SettingsSubPage
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
@@ -93,19 +96,29 @@ fun AboutPage(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = "本工程的起点是 IQ Code（MIT）。协议层、Agent 主循环与工具集、沙箱宿主层的早期实现" +
-                "都从它那里起步，之后被分批重写 —— 重写不免除署名义务，这份致谢是自愿保留的。",
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        )
-        Text(
-            text = "Copyright (c) 2026 zhizhu0002 · MIT",
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        )
+        // 致谢与版权收进一张卡里，与上面两个分组同一形态（示例 App 的 About 页
+        // 也是"每一块信息各自一张 Card"，裸文本挂在卡片之间会显得没有归属）。
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            cornerRadius = ZhiRadius.card,
+            insideMargin = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Column {
+                Text(
+                    text = "本工程的起点是 IQ Code（MIT）。协议层、Agent 主循环与工具集、沙箱宿主层的" +
+                        "早期实现都从它那里起步，之后被分批重写 —— 重写不免除署名义务，" +
+                        "这份致谢是自愿保留的。",
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                )
+                Text(
+                    text = "Copyright (c) 2026 zhizhu0002 · MIT",
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    fontSize = MiuixTheme.textStyles.footnote2.fontSize,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
     }
 }
 

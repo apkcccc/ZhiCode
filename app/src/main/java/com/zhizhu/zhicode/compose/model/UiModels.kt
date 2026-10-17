@@ -642,6 +642,21 @@ data class WorkspaceUiState(
      * （绝不能吸底），两者不能共用一个计数。
      */
     val transcriptJumpRevision: Int = 0,
+    /**
+     * 对话流里**就地改过某一条的内容**的次数（展开工具、展开分组、展开思考、补回全文）。
+     *
+     * <p>为什么需要它：`ChatList` 用一份**廉价结构指纹**（条数 / 首尾 id / 最后一条正文长度 /
+     * 最后一条工具数）当 `remember` 的 key，而不是拿整份 `List<ChatItem>` 去深比较
+     * —— 流式输出每 32ms 换一次 list，深比较会把主线程吃满。
+     *
+     * <p>但"展开某条工具"这类操作**条数不变、首尾不变、正文长度不变**：指纹一模一样，
+     * 于是 `id → ChatItem` 的那份索引仍然指向**旧实例**（`expanded = false`），
+     * 界面表现就是**点工具卡没反应**。这就是用户报的「工具卡无法展开」。
+     *
+     * <p>所以这种"结构不变、内容原地变"的修改必须显式 +1。它只是一个 Int，
+     * 进指纹是 O(1)，不破坏原来的性能意图。
+     */
+    val transcriptRevision: Int = 0,
     val tab: WorkspaceTab = WorkspaceTab.CHAT,
     val composerText: String = "",
     val composerBusy: Boolean = false,

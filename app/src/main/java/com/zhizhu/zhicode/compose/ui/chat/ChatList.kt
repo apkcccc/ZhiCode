@@ -434,6 +434,7 @@ fun ChatList(
         prepend = state.transcriptPrependRevision,
         jump = state.transcriptJumpRevision,
         session = state.activeSessionId,
+        revision = state.transcriptRevision,
     )
     val blocks = remember(transcriptStamp) {
         TurnLayout.blocks(
@@ -497,9 +498,16 @@ fun ChatList(
                 "松开加载",
                 "正在加载…",
             ),
-            // 内边距交给里面的 LazyColumn：外壳自己不留白，否则列表会整体下移一截，
-            // 与"加载完停留原地"时的锚点补偿打架。
-            contentPadding = PaddingValues(0.dp),
+            // ⚠️ `PullToRefresh` 的 `contentPadding` **不是**给内容留白用的
+            // （它会传给里面的 LazyColumn 吗？不会 —— 核过 0.9.4 的源码：它只做
+            // `RefreshHeader(modifier = Modifier.offset(y = contentPadding.calculateTopPadding()))`,
+            // 也就是**只把刷新指示器整体下移**，内容的高度与位置都不受影响）。
+            //
+            // 正是靠这个，指示器才不会画在 y=0 被悬浮顶栏整个盖住（用户报的
+            // 「PullToRefresh 怎么被顶栏覆盖了」）。列表自己的顶部留白仍然由
+            // LazyColumn 的 `contentPadding.top` 负责 —— 那是"第一条消息从顶栏下缘起排，
+            // 滚动时从顶栏底下穿过"的实现方式，两处不是同一件事，别合并。
+            contentPadding = PaddingValues(top = topInset),
         ) {
             LazyColumn(
                 state = listState,
@@ -1047,7 +1055,7 @@ private fun AnimatedMember(
  * `body: String` 与 `tools: List<ToolActivity>`。而流式输出每 32ms 就换一次 list，
  * 于是每帧都要在 O(n·m) 个字符上比一遍。长会话里这一项足以把主线程吃满。
  *
- * 这个数据类只有 7 个原始类型/字符串字段，判等是常数时间。
+ * 这个数据类只有 8 个原始类型/字符串字段，判等是常数时间。
  *
  * ## 为什么是这几个字段
  *
@@ -1059,6 +1067,7 @@ private fun AnimatedMember(
  * | [lastToolCount] | 追加/移除工具行 |
  * | [prepend] / [jump] | 补页与"回到最新"是**原地替换**，条数可能恰好不变 |
  * | [session] | 切会话时列表可能长度相同、首尾 id 也相同（同一个会话的两次快照） |
+ * | [revision] | 展开工具/分组/思考、补回输出全文：条数与首尾**都不变**，只有某一条的内容原地变 |
  *
  * ⚠️ 漏判的后果是**界面不更新**（而不是崩），所以加字段比省字段安全。
  * 反过来说，任何时候如果出现"某条消息的内容变了但界面没动"，
@@ -1073,4 +1082,13 @@ private data class TranscriptStamp(
     val prepend: Int,
     val jump: Int,
     val session: String,
+    /**
+     * 就地修改计数（[com.zhizhu.zhicode.compose.model.WorkspaceUiState.transcriptRevision]）。
+     *
+     * ⚠️ 这一项是**弹出来的 bug 的修复点**：没有它时，点一个工具卡（展开）不改条数、
+     * 不改首尾 id、不改最后一条的正文长度与工具数（被点的那条往往不是最后一条），
+     * 指纹一模一样 → 下面那份 `id → ChatItem` 索引仍然指向**旧实例**
+     * （`expanded = false`）→ 界面看起来就是「点了没反应」。
+     */
+    val revision: Int,
 )

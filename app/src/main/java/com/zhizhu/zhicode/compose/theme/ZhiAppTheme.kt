@@ -49,7 +49,6 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
 @Composable
 fun ZhiAppTheme(theme: ThemeSettings, content: @Composable () -> Unit) {
     val isDark = ZhiThemeMode.rememberCurrentDark(theme.mode)
-    val colors = rememberZhiColors(theme, isDark)
     // 应用内换主题时状态栏图标要跟着换：onResume 那条路径只在回到前台时补，
     // 期间图标会一直是相反的明暗。
     ZhiThemeMode.ApplySystemBars(isDark)
@@ -62,8 +61,20 @@ fun ZhiAppTheme(theme: ThemeSettings, content: @Composable () -> Unit) {
         // 否则用户系统的「字体大小」设置会在应用里失效。
         LocalDensity provides scaledDensity(theme.uiScale),
     ) {
+        // ⚠️⚠️ 色板必须在**这两个 Local 之内**求值，这是修过的一个真实 bug。
+        //
+        // 原来 `val colors = rememberZhiColors(theme, isDark)` 写在
+        // `CompositionLocalProvider` **之前**，于是色板函数里的
+        // `ZhiColors.backdrop()` 读到的是 Provider **外层**的值：
+        //   · `LocalZhiDark` → 默认 `false`；
+        //   · `LocalAmoled` → 默认 `false`。
+        // 结果：**深色模式下整个主题的 `background` 是浅色背板 `#F1F1F3`**，
+        // 而面板/卡片（它们读的是 Provider 内的正确值）是深色 —— 板块之间的缝、
+        // 顶栏透出的底色、页面切换时露出的那一层全是浅灰；AMOLED 开关同样完全无效
+        // （因为 `background` 那一份永远按非纯黑算出来）。
+        // 用户说的「主题还是有很多问题」里最主要的一条就是这个。
         MiuixTheme(
-            colors = colors,
+            colors = rememberZhiColors(theme, isDark),
             textStyles = zhiTextStyles(),
             content = content,
         )

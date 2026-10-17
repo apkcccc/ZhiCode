@@ -337,12 +337,16 @@ private fun ZhiCodeScreen(
             val live = viewModel.state.value
             when {
                 live.uiDebugOpen -> viewModel.closeUiDebug()
+                live.licensesOpen -> viewModel.closeLicenses()
+                live.aboutOpen -> viewModel.closeAbout()
                 live.apiConfig != null -> viewModel.closeApiConfig()
                 live.mcpConfig != null -> viewModel.closeMcpConfig()
                 live.searchServices != null -> viewModel.closeSearchServices()
                 live.skills != null -> viewModel.closeSkills()
                 live.roleCards != null -> viewModel.closeRoleCards()
                 live.memory != null -> viewModel.closeMemory()
+                live.promptsOpen -> viewModel.closePrompts()
+                live.themePageOpen -> viewModel.closeThemePage()
                 live.settingsOpen -> viewModel.closeSettings()
             }
         },

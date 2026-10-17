@@ -6235,6 +6235,10 @@ class WorkspaceViewModel(
                         tools = item.tools.map { if (it.id == id) it.copy(expanded = !it.expanded) else it },
                     )
                 },
+                // 结构指纹（条数/首尾/最后一条正文与工具数）都不变，只有内容原地变了 ——
+                // 不 +1 的话 `ChatList` 的 `id → ChatItem` 索引仍然指向旧实例，
+                // 于是点工具卡**没有任何反应**（用户报的「工具卡无法展开」）。
+                transcriptRevision = s.transcriptRevision + 1,
             )
         }
         if (willExpand) loadFullToolOutput(id)
@@ -6274,6 +6278,7 @@ class WorkspaceViewModel(
                             },
                         )
                     },
+                    transcriptRevision = s.transcriptRevision + 1,
                 )
             }
         }
@@ -6298,6 +6303,7 @@ class WorkspaceViewModel(
                         tools = item.tools.map { if (it.id == toolId) it.copy(expanded = expanded) else it },
                     )
                 },
+                transcriptRevision = s.transcriptRevision + 1,
             )
         }
         // 与 toggleToolExpanded 同一条规则：展开时按需取全文。
@@ -6330,6 +6336,7 @@ class WorkspaceViewModel(
                         )
                     }
                 },
+                transcriptRevision = s.transcriptRevision + 1,
             )
         }
     }
@@ -6338,6 +6345,7 @@ class WorkspaceViewModel(
         _state.update { s ->
             s.copy(
                 transcript = s.transcript.map { if (it.id == id) it.copy(thinkingExpanded = !it.thinkingExpanded) else it },
+                transcriptRevision = s.transcriptRevision + 1,
             )
         }
     }

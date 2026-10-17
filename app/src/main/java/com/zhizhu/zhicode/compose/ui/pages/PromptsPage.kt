@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zhizhu.zhicode.compose.model.PromptSlot
 import com.zhizhu.zhicode.compose.ui.ZhiTextField
+import com.zhizhu.zhicode.compose.ui.settings.SettingsFootnote
 import com.zhizhu.zhicode.compose.ui.settings.SettingsGroup
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageKey
 import com.zhizhu.zhicode.compose.ui.settings.SettingsPageStack
@@ -105,12 +106,9 @@ private fun PromptSlotList(
 ) {
     val scheme = MiuixTheme.colorScheme
     Column {
-        Text(
-            text = "这三项都只影响某一件事的措辞，不参与权限与安全判断。" +
+        SettingsFootnote(
+            "这三项都只影响某一件事的措辞，不参与权限与安全判断。" +
                 "主系统提示不开放编辑——它规定了「不许声称做了没做的事」，那一条不能松。",
-            color = scheme.onSurfaceVariantSummary,
-            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         )
         SettingsGroup("可自定义") {
             PromptSlot.entries.forEach { slot ->
@@ -151,12 +149,7 @@ private fun PromptSlotEditor(
 ) {
     val scheme = MiuixTheme.colorScheme
     Column {
-        Text(
-            text = slot.detail,
-            color = scheme.onSurfaceVariantSummary,
-            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        )
+        SettingsFootnote(slot.detail)
         SettingsGroup("可用变量") {
             Text(
                 text = slot.variables,
@@ -200,11 +193,6 @@ private fun PromptSlotEditor(
                 insideMargin = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             )
         }
-        Text(
-            text = "改动立刻生效并落盘，不需要保存。",
-            color = scheme.onSurfaceVariantSummary,
-            fontSize = MiuixTheme.textStyles.footnote2.fontSize,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        )
+        SettingsFootnote("改动立刻生效并落盘，不需要保存。")
     }
 }
