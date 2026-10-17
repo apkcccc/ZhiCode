@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import com.zhizhu.zhicode.compose.data.ThemeSettings
@@ -93,33 +95,58 @@ val LocalThemeSettings = androidx.compose.runtime.compositionLocalOf { ThemeSett
 /**
  * 生成最终色板。
  *
- * ## 两条路
+ * ## 两条路，**只有中性色不同**
  *
- * - **Monet 开**：交给 Miuix 的 `ThemeController`（内部是 Material Color Utilities
- *   的 HCT 算法）从种子色生成整套色板。我们只覆写 `background` ——
- *   它必须等于 [ZhiColors.backdrop]，否则状态栏那一条会与背板不同色。
- * - **Monet 关**：与改动前**逐色相同**（`darkColorScheme()`，或
- *   `lightColorScheme().zhiLightNeutrals()`）。这是这次主题改造的硬验收线：
- *   默认设置下用户看到的每一个像素都不该变。
+ * 种子色（预设色卡 / 自定义色）在**两种模式下都生效** —— 它决定强调色（primary 一族）。
+ * [ThemeSettings.dynamicColor] 决定的是**中性色**要不要也跟着种子色走：
+ *
+ * - **Monet 开**：整套色板由 [ThemeController]（Material Color Utilities 的 HCT 算法）
+ *   从种子色生成。中性色会带一点种子色的色味，这是 Monet 的标志。
+ * - **Monet 关**：中性色（背板 / 面板 / 卡片 / 次级填充）用本工程调过的那一套固定值
+ *   （浅色见 [Colors.zhiLightNeutrals]，深色用 `darkColorScheme()` 原值），
+ *   **只有强调色一族**取自生成结果。
+ *
+ * ⚠️ 这条分工是修过的一个真实 bug。之前 `dynamicColor = false` 时整份色板都是写死的，
+ * 于是**点预设色卡什么都不变** —— 只有预览卡与设置页里那个色块换了个颜色，
+ * 界面其余部分还是原来的蓝。用户看到的就是"主题设置里一堆东西点了没用"。
  *
  * ## 为什么不用 `MiuixTheme(controller = …)`
  *
  * 那个重载会把 `colorSchemeMode` 一起提供出去（`MiuixTheme.isDynamicColor` 依赖它），
- * 但我们还要在**它之上**覆写 `background`，而 controller 那条路没有"再覆写一层"的出口。
- * 所以这里只借 controller 的 `currentColors()` 拿到生成结果，再自己 copy。
+ * 但我们还要在**它之上**覆写 `background` 与中性色，而 controller 那条路没有
+ * "再覆写一层"的出口。所以这里只借 controller 的 `currentColors()` 拿到生成结果，再自己 copy。
  */
 @Composable
 private fun rememberZhiColors(theme: ThemeSettings, isDark: Boolean): Colors {
     val backdrop = ZhiColors.backdrop()
-
     if (!theme.dynamicColor) {
-        return remember(isDark, backdrop) {
+        // 固定中性色 + 种子色当强调色。不经过 HCT：预设色卡上的那个颜色就该是
+        // 界面里按钮/开关/选中态的颜色，HCT 的 TonalSpot 会把它压成低饱和的中间调
+        // （默认蓝 #3482FF 会变成 #415F91 那种灰蓝），"选了绿色结果界面是灰绿"。
+        return remember(isDark, backdrop, theme.seedArgb) {
             val base = if (isDark) darkColorScheme() else lightColorScheme().zhiLightNeutrals()
-            base.copy(background = backdrop)
+            val seed = Color(theme.seedArgb)
+            // 亮色种子（暖阳橙 / 樱花粉）配白字会糊，按亮度换深色字。
+            val onSeed = if (seed.luminance() > 0.45f) Color(0xFF141414) else Color.White
+            val container = if (isDark) lerp(seed, Color.Black, 0.62f) else lerp(seed, Color.White, 0.78f)
+            val onContainer = if (isDark) lerp(seed, Color.White, 0.55f) else lerp(seed, Color.Black, 0.45f)
+            base.copy(
+                background = backdrop,
+                primary = seed,
+                onPrimary = onSeed,
+                primaryVariant = seed,
+                onPrimaryVariant = onSeed,
+                primaryContainer = container,
+                onPrimaryContainer = onContainer,
+                // `secondary` 一族**不**跟着种子色走：浅色里它们被
+                // `zhiLightNeutrals()` 用作中性填充（`SoftFillLight`），
+                // 换成带色味的值会让浅色下"发灰发脏"那个老问题回来。
+            )
         }
     }
 
-    // Monet：控制器本身要 remember，否则每次重组都重建一套（含 HCT 计算）。
+    // Monet：整套色板由 HCT 从种子色生成（含中性色）。控制器本身要 remember，
+    // 否则每次重组都重建一套（含算法计算）。
     val controller = remember(theme.seedArgb, theme.paletteStyle, theme.colorSpec, isDark) {
         ThemeController(
             colorSchemeMode = ColorSchemeMode.MonetSystem,
@@ -136,7 +163,7 @@ private fun rememberZhiColors(theme: ThemeSettings, isDark: Boolean): Colors {
         )
     }
     val generated = controller.currentColors()
-    return remember(generated, backdrop, isDark) {
+    return remember(generated, backdrop) {
         // Monet 的浅色板用它自己的中性色（带种子色的灰）——**不要**再套
         // `zhiLightNeutrals()`：那套灰是为"固定色板"调的，叠在生成色板上
         // 会让强调色与容器色对不上（生成算法保证的是它自己那一套对比度）。

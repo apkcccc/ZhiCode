@@ -262,7 +262,6 @@ fun ThemePage(
 private fun ThemePreviewCard(theme: ThemeSettings) {
     val scheme = MiuixTheme.colorScheme
     val preset = remember(theme.presetId) { presetById(theme.presetId) }
-    val accent = Color(theme.seedArgb)
 
     Card(
         modifier = Modifier
@@ -281,20 +280,21 @@ private fun ThemePreviewCard(theme: ThemeSettings) {
                 fontWeight = FontWeight.Medium,
             )
             Text(
-                text = if (theme.dynamicColor) "Monet · ${theme.paletteStyle}" else "应用内置色板",
+                text = if (theme.dynamicColor) "Monet · ${theme.paletteStyle}" else "强调色取自预设 · 中性色固定",
                 color = scheme.onSurfaceVariantSummary,
                 fontSize = MiuixTheme.textStyles.footnote1.fontSize,
                 modifier = Modifier.padding(top = 2.dp),
             )
-            // 强调色块：Monet 开着时它是**生成结果**而不是种子色 ——
-            // 那正是用户想看的（算法会把它调成什么）。
+            // 强调色块：现在两种模式下都是**当前真正在用的强调色**（`scheme.primary`）。
+            // 以前非 Monet 分支画的是预设种子色本身，于是预览里的颜色与界面实际用的
+            // 颜色不是同一个 —— 那正是"主题设置里点了什么都不对"的一部分。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
                     .padding(top = 10.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(if (theme.dynamicColor) scheme.primaryContainer else accent),
+                    .background(scheme.primary),
             )
             Box(
                 modifier = Modifier
