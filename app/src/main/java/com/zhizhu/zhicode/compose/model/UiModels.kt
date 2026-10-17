@@ -844,6 +844,15 @@ data class WorkspaceUiState(
      * 没有要读盘或异步加载的载荷，所以一个布尔就够。
      */
     val themePageOpen: Boolean = false,
+    /**
+     * 关于页 / 第三方许可页。
+     *
+     * <p>它们是**应用级**页面而不是设置子页：入口在侧栏与设置里各有一个，
+     * 而从侧栏进来时设置页并不开着。所以两个布尔平级放在这里，
+     * 而不是塞进某个设置状态对象里。
+     */
+    val aboutOpen: Boolean = false,
+    val licensesOpen: Boolean = false,
     val modelPicker: com.zhizhu.zhicode.compose.model.ModelPickerState? = null,
     /**
      * 非空即「UI 调试」整页打开（**仅 debug 构建**有入口，见设置页的「扩展」组）。

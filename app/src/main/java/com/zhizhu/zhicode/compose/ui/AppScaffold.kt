@@ -6,9 +6,11 @@ import com.zhizhu.zhicode.compose.ui.debug.ZhiFrameTrace
 import com.zhizhu.zhicode.compose.ui.pages.ApiConfigPage
 import com.zhizhu.zhicode.compose.ui.pages.McpConfigPage
 import com.zhizhu.zhicode.compose.ui.pages.SearchServicesPage
+import com.zhizhu.zhicode.compose.ui.pages.AboutPage
 import com.zhizhu.zhicode.compose.ui.pages.MemoryPage
 import com.zhizhu.zhicode.compose.ui.pages.PromptsPage
 import com.zhizhu.zhicode.compose.ui.pages.ThemePage
+import com.zhizhu.zhicode.compose.ui.pages.ThirdPartyLicensesPage
 import com.zhizhu.zhicode.compose.ui.pages.RoleCardsPage
 import com.zhizhu.zhicode.compose.ui.pages.SkillsPage
 import com.zhizhu.zhicode.compose.ui.pages.SettingsPage
@@ -237,7 +239,13 @@ private fun ZhiCodeScreen(
     // 这里只把它翻译成栈，增量 reconcile —— pop 触发弹出动画、push 触发推入动画。
     val desiredStack: List<NavKey> = buildList {
         add(AppKey.Workspace)
-        if (state.uiDebugOpen) {
+        // 「关于」与「第三方许可」是**应用级**页面：入口在侧栏与设置里各一个，
+        // 从侧栏进来时设置页并没有开着。所以它们先于设置分支判断，
+        // 且许可页压在关于页之上（一条链：关于 → 许可）。
+        if (state.aboutOpen) {
+            add(AppKey.About)
+            if (state.licensesOpen) add(AppKey.Licenses)
+        } else if (state.uiDebugOpen) {
             // UI 调试是**整页**而不是设置二级页：它显示的是全部组件与状态，
             // 与设置 draft 无关。放在 settingsOpen 之前判断，于是从设置页进来时
             // 栈是 [工作区, UI 调试]（设置主页留在 settingsOpen 里，返回即回到它）。
@@ -478,6 +486,15 @@ private fun ZhiCodeScreen(
                 onReset = viewModel::resetPromptSlot,
             )
         }
+        entry<AppKey.About>(swipeDismiss = swipeBack) {
+            AboutPage(
+                onBack = viewModel::closeAbout,
+                onOpenLicenses = viewModel::openLicenses,
+            )
+        }
+        entry<AppKey.Licenses>(swipeDismiss = swipeBack) {
+            ThirdPartyLicensesPage(onBack = viewModel::closeLicenses)
+        }
         // UI 调试整页（仅 debug 构建有入口）。它拿的是**真实 state 与 ViewModel**：
         // 页面里的输入器、各浮层入口都是真能用的，不是静态贴图。
         entry<AppKey.UiDebug>(swipeDismiss = swipeBack) {
@@ -511,6 +528,16 @@ private sealed interface AppKey : NavKey {
 
     /** UI 调试整页（debug 构建的设置页里有入口）。 */
     data object UiDebug : AppKey
+
+    /**
+     * 关于页与第三方许可页。
+     *
+     * <p>放在 [AppKey] 而不是 [SettingsKey]：它们的入口在侧栏也有一个，
+     * 从侧栏进来时设置页并没有打开。放进 [SettingsKey] 会让"返回"落到一个
+     * 用户从没打开过的设置主页上。
+     */
+    data object About : AppKey
+    data object Licenses : AppKey
 }
 
 /** 设置相关页面：hub 与各二级页。 */

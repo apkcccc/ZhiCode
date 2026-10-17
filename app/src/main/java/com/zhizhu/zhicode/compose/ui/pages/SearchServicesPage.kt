@@ -130,12 +130,13 @@ private fun SearchServiceList(
             if (state.loading) {
                 SettingsLoadingHint()
             } else if (state.services.isEmpty()) {
-                // 空列表是正常的初始状态（默认走免费的 DuckDuckGo/Bing），
-                // 但只说"没有数据"会让人以为坏了 —— 写清默认行为与下一步。
+                // 真正走到这里只有一种情况：用户把种下的两条预设也删光了
+                // （首次进入时会自动种 DuckDuckGo + Bing RSS，见 SearchServiceStore）。
+                // 所以文案说的是"删光了"而不是"还没配过"。
                 Text(
-                    text = "还没有添加搜索服务，默认使用免费的 DuckDuckGo / Bing。" +
-                        "点右上角「新增」可以接入 Tavily、Exa、Brave、Perplexity、SearXNG 等 —— " +
-                        "密钥存进系统加密存储，与其他 API 密钥同一套保护。",
+                    text = "服务列表是空的，搜索会回落到内置的免费后端。" +
+                        "点右上角「新增」可以接回 DuckDuckGo / Bing，或接入 Tavily、Exa、Brave、" +
+                        "Perplexity、SearXNG 等 —— 密钥存进系统加密存储，与其他 API 密钥同一套保护。",
                     color = scheme.onSurfaceVariantSummary,
                     fontSize = MiuixTheme.textStyles.footnote1.fontSize,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),

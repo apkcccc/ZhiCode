@@ -63,6 +63,7 @@ MAIN_KT_SOURCES=(
     app/src/main/java/com/zhizhu/zhicode/compose/model/ActionBusy.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/McpDraft.kt
     app/src/main/java/com/zhizhu/zhicode/compose/model/PromptSlots.kt
+    app/src/main/java/com/zhizhu/zhicode/compose/model/Licenses.kt
     app/src/main/java/com/zhizhu/zhicode/compose/theme/ZhiThemeSpec.kt
 )
 
@@ -91,6 +92,7 @@ DEFAULT_TESTS=(
     com.termux.app.zhicode.core.PromptStructureTest
     com.zhizhu.zhicode.compose.model.PromptSlotsTest
     com.zhizhu.zhicode.compose.theme.ThemeSpecTest
+    com.zhizhu.zhicode.compose.model.LicensesTest
 )
 
 # 哪些目标是 Kotlin。

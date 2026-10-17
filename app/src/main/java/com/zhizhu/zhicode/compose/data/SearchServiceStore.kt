@@ -38,8 +38,18 @@ internal object SearchServiceStore {
 
     fun read(context: Context): SearchServicesState {
         val stored = ApiSettingsStore.readSearchServices(context)
-        val services = parseServices(stored[0])
-        val activeId = stored[1]
+        var services = parseServices(stored[0])
+        var activeId = stored[1]
+        // 一条都没有时给两条**免费**预设（DuckDuckGo 可用 + Bing 备用）。
+        //
+        // 为什么不在 `AppSettings` 里预置：那样"用户删光了"与"从没配过"就分不开，
+        // 删完下次进页面又被塞回来。所以这里用一次性标记 —— 种过一次就不再种。
+        if (services.isEmpty() && !ApiSettingsStore.isSearchSeedDone(context)) {
+            services = SEED_SERVICES
+            activeId = SEED_ACTIVE_ID
+            write(context, services, activeId)
+            ApiSettingsStore.markSearchSeedDone(context)
+        }
         return SearchServicesState(
             services = services,
             // activeId 指向一条不存在的记录（被删了）时回落到第一条：
@@ -48,6 +58,30 @@ internal object SearchServiceStore {
             else services.firstOrNull()?.id.orEmpty(),
         )
     }
+
+    /**
+     * 首次进入时种下的两条预设。
+     *
+     * 选它们而不是 Tavily/Exa：那两家要密钥，而"打开设置就看到一个必须先去注册才能用的空框"
+     * 是这条链路以前劝退用户的地方。DuckDuckGo 与 Bing RSS 都是免费公开入口，
+     * 种下去就能直接搜 —— Bing 那条**停用**是因为它只是限流时的备份，
+     * 两条都启用会让"当前使用"看起来有歧义。
+     */
+    private val SEED_SERVICES: List<SearchService> = listOf(
+        SearchService(
+            id = "search-duckduckgo",
+            name = "DuckDuckGo",
+            type = SearchServiceType.DUCKDUCKGO,
+        ),
+        SearchService(
+            id = "search-bing",
+            name = "Bing RSS",
+            type = SearchServiceType.BING,
+            enabled = false,
+        ),
+    )
+
+    private const val SEED_ACTIVE_ID = "search-duckduckgo"
 
     /**
      * 保存（新增或按 [SearchServiceDraft.id] 覆盖）。

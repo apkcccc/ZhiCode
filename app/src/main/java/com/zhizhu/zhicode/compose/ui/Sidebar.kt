@@ -137,6 +137,8 @@ fun ZhiSidebar(
     onSandbox: () -> Unit,
     onRuntime: () -> Unit,
     onSettings: () -> Unit,
+    /** 「关于」入口（与设置页底部那一项同一个目标）。 */
+    onAbout: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MiuixTheme.colorScheme
@@ -267,6 +269,10 @@ fun ZhiSidebar(
                     onClick = onRuntime,
                 )
                 SidebarRow(label = "设置", icon = ZhiIcons.settings, onClick = onSettings)
+                // 「关于」放在导航组的最后：它是**只读信息**，不是工作入口。
+                // 与设置页底部那一项是同一个目标（两处入口是刻意的：侧栏是导航，
+                // 设置页是"我在找设置时顺手会看到"）。
+                SidebarRow(label = "关于 ZhiCode", icon = ZhiIcons.info, onClick = onAbout)
             }
         }
     }

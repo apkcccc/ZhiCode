@@ -128,6 +128,14 @@ public final class ApiSettingsStore {
         static final String ACTIVE_SEARCH_SERVICE = "active_search_service_id";
         /** 老配置（单个 provider）迁移成服务列表的一次性标记。 */
         static final String SEARCH_MIGRATION = "search_service_migration_v1";
+        /**
+         * 「已经种过两条免费预设」的一次性标记。
+         *
+         * <p>与 {@link #SEARCH_MIGRATION} **分开**：后者管"把老版单 provider 迁过来"，
+         * 前者管"从没配过的人给两条能直接用的"。共用标记会让两件事互相压制 ——
+         * 比如老用户迁完之后，种子逻辑就再也跑不到，但他的迁移结果可能是一条要密钥的服务。
+         */
+        static final String SEARCH_SEED = "search_service_seed_v1";
 
         private Key() {}
     }
@@ -744,6 +752,25 @@ public final class ApiSettingsStore {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean(Key.SEARCH_MIGRATION, true)
+                .apply();
+    }
+
+    /** 见 {@link Key#SEARCH_SEED}。 */
+    public static boolean isSearchSeedDone(Context context) {
+        if (context == null) return true;
+        Context app = context.getApplicationContext();
+        if (app == null) app = context;
+        return app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(Key.SEARCH_SEED, false);
+    }
+
+    public static void markSearchSeedDone(Context context) {
+        if (context == null) return;
+        Context app = context.getApplicationContext();
+        if (app == null) app = context;
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(Key.SEARCH_SEED, true)
                 .apply();
     }
 

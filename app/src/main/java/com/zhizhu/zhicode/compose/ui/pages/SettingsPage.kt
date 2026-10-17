@@ -609,8 +609,15 @@ private fun ExtensionsPage(onNavigate: (String) -> Unit, extensions: ExtensionSu
         plate = SettingsPlateColors.green,
         onClick = { onNavigate("roleCards") },
     )
-    // 「关于」行已删：onClick 是空的，点了没反应——rikkahub 的 About 页有
-    // 版本/开源许可/检查更新等真实内容，我们暂时没有可放的，空壳不如没有。
+    // 「关于」现在有真实内容了（版本 / 源码 / 许可证 / 第三方组件许可），
+    // 所以把它加回来 —— 之前删掉的理由是"点了没反应的空壳不如没有"。
+    SettingsIconEntry(
+        title = "关于 ZhiCode",
+        summary = "版本、源码、许可证与第三方组件许可",
+        icon = ZhiIcons.info,
+        plate = SettingsPlateColors.gray,
+        onClick = { onNavigate("about") },
+    )
     SettingsIconEntry(
         title = "记忆文件 · ZhiCode.md",
         summary = "项目级与用户级说明文件",

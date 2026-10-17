@@ -383,6 +383,7 @@ internal fun ZhiSidebarHost(
         // 不再是把 /doctor 当普通消息发出去（那样只会得到一句 Mock 回复）。
         onRuntime = viewModel::openEnvironment,
         onSettings = viewModel::openSettings,
+        onAbout = viewModel::openAbout,
         modifier = modifier,
     )
 }

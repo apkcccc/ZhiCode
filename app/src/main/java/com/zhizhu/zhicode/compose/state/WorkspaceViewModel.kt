@@ -1864,6 +1864,29 @@ class WorkspaceViewModel(
         _state.update { it.copy(themePageOpen = false) }
     }
 
+    /**
+     * 打开「关于」。
+     *
+     * 入口有两个（侧栏「更多」组、设置页底部），所以这里**不**顺带打开设置页 ——
+     * 从侧栏进来时它就该是一个独立的整页，返回直接回工作区。
+     */
+    fun openAbout() {
+        _state.update { it.copy(aboutOpen = true, sidebarOpen = false) }
+    }
+    fun closeAbout() {
+        // 从关于页返回时把许可页也收掉：它们是一条链（关于 → 许可），
+        // 只关上面那层的话，返回一次会看到许可页还在。
+        _state.update { it.copy(aboutOpen = false, licensesOpen = false) }
+    }
+
+    fun openLicenses() {
+        _state.update { it.copy(licensesOpen = true) }
+    }
+
+    fun closeLicenses() {
+        _state.update { it.copy(licensesOpen = false) }
+    }
+
     fun removeAttachment(id: String) {
         attachmentPayloads.remove(id)
         _state.update { s -> s.copy(attachments = s.attachments.filterNot { it.id == id }) }
@@ -6188,6 +6211,9 @@ class WorkspaceViewModel(
             "memory" -> openMemory()
             "prompts" -> openPrompts()
             "theme" -> openThemePage()
+            // 从设置页进来时设置页仍然开着，于是返回会先回到设置主页 ——
+            // 这正是从设置里点进去的人期望的。
+            "about" -> openAbout()
             "uiDebug" -> openUiDebug()
             else -> Unit
         }
